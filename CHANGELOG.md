@@ -7,9 +7,7 @@
 
 ### Fixed
 - Removing or rebuilding a filter that holds the end of the file, such as `rubberband` in the last few hundred milliseconds, no longer stops playback there for good: mpv re-seeks to decode the end again (`patch_chain_eof.py`).
-- OpenSSL no longer cleans up from an exit handler, which ran before the analysis drain and freed TLS state under a running scan.
 - PipeWire and PulseAudio stay loaded until the process exits: the stubs unloaded them from an exit handler, under the audio thread of an app that exits without destroying the player.
-- When an analysis worker fails to start, the ones already running are stopped before the join instead of decoding their whole region.
 
 ### Changed
 - Linux builds on Ubuntu 20.04, so the library needs glibc 2.31 instead of 2.38, plus ALSA (`libasound.so.2`). It loads PipeWire and PulseAudio only when they are installed, and skips a PipeWire older than 0.3.57 in favour of PulseAudio, then ALSA.
@@ -25,6 +23,14 @@
 - CI loads the Linux x86_64 library in a Debian 11 container without PipeWire and PulseAudio, lists the audio devices and plays a tone, falling through to ALSA and then the null output. The container falls back to archive.debian.org as Debian 11 moves there.
 - The Android build stops on `DT_RELR` or on 64 bit libraries not aligned for 16 KB pages.
 - The PipeWire and PulseAudio stubs come from Implib.so, vendored in `tools/implib`. They build without asserts, so no build path ends up in the library, and rebuild when `PIPEWIRE_VERSION` changes.
+
+## [0.1.7] - 10-10-2026
+
+### Fixed
+- Windows: `playlist-prev-playlist` across two playlist files no longer aborts on the ta canary assertion. It appended a separator to a string that the previous append had moved (`patch_playlist_prev_dos_path.py`).
+- Windows: destroying a libmpv core that had read `audio-device-list` no longer crashes the process or corrupts its heap. The device watcher (WASAPI, which is COM) was torn down on the thread destroying the core instead of the core thread that created it (`patch_hotplug_core_thread.py`).
+- OpenSSL no longer cleans up from an exit handler, which ran before the analysis drain and freed TLS state under a running scan.
+- When an analysis worker fails to start, the ones already running are stopped before the join instead of decoding their whole region.
 
 ## [0.1.6] - 24-09-2026
 
