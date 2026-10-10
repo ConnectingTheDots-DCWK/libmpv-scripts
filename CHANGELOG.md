@@ -14,7 +14,7 @@
 - Linux builds on Ubuntu 20.04, so the library needs glibc 2.31 instead of 2.38, plus ALSA (`libasound.so.2`). It loads PipeWire and PulseAudio only when they are installed, and skips a PipeWire older than 0.3.57 in favour of PulseAudio, then ALSA.
 - Linux builds natively, one architecture per host: the menu greys out the other one, and `./build all` skips what the host cannot build.
 - Linux keeps plain RELA relocations: RELR would need glibc 2.36.
-- mpv's version string carries the release (`mpv v0.41.0+r15`), and a build writes `manifest.json` with the versions, the compiled filters and the hash of every library.
+- mpv's version string carries the release (`mpv v0.41.0+r16`), and a build writes `manifest.json` with the versions, the compiled filters and the hash of every library.
 
 ### Build
 - Every source tarball, Windows included, is pinned by SHA-256, and every git source (libplacebo, libsmb2, PipeWire) by the commit of its tag. CI stops on an unpinned source and uploads the line to add.
