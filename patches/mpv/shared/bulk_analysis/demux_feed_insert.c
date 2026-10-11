@@ -1,17 +1,15 @@
 
 /* MAK_WAVEFORM_PATCH ─── attach the bulk analysis packet feed (see
- * demux/mak_demux_feed.h). Replays the cached packets of [sh] in media order,
- * one cached range after the other, then leaves the feed on the demuxer so
+ * demux/mak_demux_feed.h). Replays the cached packets of [sh] in the range
+ * the demuxer is filling, then leaves the feed on the demuxer so
  * add_packet_locked() queues every new one. */
-static int mak_feed_range_cmp(const void *a, const void *b)
-{
-    const struct demux_cached_range *ra = *(struct demux_cached_range *const *)a;
-    const struct demux_cached_range *rb = *(struct demux_cached_range *const *)b;
-    double sa = ra->seek_start, sb = rb->seek_start;
-    if (sa == MP_NOPTS_VALUE || sb == MP_NOPTS_VALUE)
-        return (sa == MP_NOPTS_VALUE) - (sb == MP_NOPTS_VALUE);
-    return sa < sb ? -1 : sa > sb;
-}
+
+/* The most cached packets the attach replays. The replay holds the demuxer
+ * lock on the core thread, about half a microsecond a packet on a desktop
+ * (70 ms for the 138,000 packets of an hour of MP3), and playback is not
+ * fed meanwhile. This keeps it near 15 ms there; a longer cache, which only
+ * the analysis enabled late in a long file meets, re-opens instead. */
+#define MAK_FEED_MAX_REPLAY 32768
 
 struct mak_demux_feed *mak_demux_feed_attach(struct demuxer *demuxer,
                                              struct sh_stream *sh)
@@ -36,18 +34,23 @@ struct mak_demux_feed *mak_demux_feed_attach(struct demuxer *demuxer,
                   in->d_thread->desc != &demuxer_desc_timeline &&
                   in->stream_size > 0 &&
                   (uint64_t)in->stream_size <= (uint64_t)in->max_bytes;
-    /* The cache must hold the start of the file, or be about to read it:
-     * right after the open, the first read marks the queue as the start
-     * (after_seek_to_start) only when it happens. */
-    bool has_bof = false;
-    for (int n = 0; usable && n < in->num_ranges; n++) {
-        struct demux_queue *q = in->ranges[n]->streams[ds->index];
-        bool current = in->ranges[n] == in->current_range;
-        if ((q->is_bof && (q->head || current)) ||
-            (current && !q->head && in->after_seek_to_start))
-            has_bof = true;
+    /* The range the demuxer is filling must start the file, or be about to
+     * read it: right after the open, the first read marks the queue as the
+     * start (after_seek_to_start) only when it happens. Another cached range
+     * that starts the file ends where a seek left it, so the pass could not
+     * go on from it. */
+    struct demux_queue *q = ds->queue;
+    bool has_bof = usable && q && q->range == in->current_range &&
+                   (q->is_bof || (!q->head && in->after_seek_to_start)) &&
+                   !(q->is_eof && !q->head);
+    size_t cached = 0;
+    for (struct demux_packet *dp = has_bof ? q->head : NULL; dp; dp = dp->next) {
+        if (++cached > MAK_FEED_MAX_REPLAY) {
+            has_bof = false;
+            break;
+        }
     }
-    if (!usable || !has_bof) {
+    if (!has_bof) {
         mp_mutex_unlock(&in->lock);
         return NULL;
     }
@@ -61,21 +64,12 @@ struct mak_demux_feed *mak_demux_feed_attach(struct demuxer *demuxer,
         return NULL;
     }
 
-    struct demux_cached_range **ranges =
-        talloc_memdup(NULL, in->ranges, in->num_ranges * sizeof(in->ranges[0]));
-    int num_ranges = ranges ? in->num_ranges : 0;
-    if (num_ranges > 1)
-        qsort(ranges, num_ranges, sizeof(ranges[0]), mak_feed_range_cmp);
-    for (int n = 0; n < num_ranges; n++) {
-        struct demux_queue *queue = ranges[n]->streams[ds->index];
-        for (struct demux_packet *dp = queue->head; dp; dp = dp->next) {
-            mak_demux_feed_push_replay(f, read_packet_from_cache(in, dp), queue,
-                                       queue->is_bof && dp == queue->head);
-        }
-        if (queue->is_eof && queue->head)
-            mak_demux_feed_mark(f, MAK_FEED_EOF);
+    for (struct demux_packet *dp = q->head; dp; dp = dp->next) {
+        mak_demux_feed_push_replay(f, read_packet_from_cache(in, dp), q,
+                                   q->is_bof && dp == q->head);
     }
-    talloc_free(ranges);
+    if (q->is_eof && q->head)
+        mak_demux_feed_mark(f, MAK_FEED_EOF);
 
     in->mak_feed = f;
     mp_mutex_unlock(&in->lock);
