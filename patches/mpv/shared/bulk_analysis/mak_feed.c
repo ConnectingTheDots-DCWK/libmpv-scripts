@@ -51,11 +51,13 @@
  * discontinuity the markers did not show (ranges joined, a reused queue). */
 #define MAK_FEED_JUMP_SECS 1.0
 
-/* How close to the duration the decode must end for the pass to count as the
- * whole file: an end of file that comes earlier is a cut download. It only
- * has to absorb what a container's duration and its decoded samples
- * disagree by (encoder delay and padding, tens of milliseconds). */
-#define MAK_FEED_END_SLACK_SECS 0.25
+/* How close to the duration the samples decoded must come for the pass to
+ * count as the whole file: an end of file that comes earlier is a cut
+ * download. A duration read from a header is within tens of milliseconds of
+ * the samples, but one estimated from the bitrate (raw AAC, an MP3 without
+ * a Xing header) can be off by more, and a tighter bound would send such a
+ * file to the re-open, downloading it twice. */
+#define MAK_FEED_END_SLACK_SECS 1.0
 
 struct feed_args {
     int gen;
@@ -65,7 +67,6 @@ struct feed_args {
     int rate;                 /* source sample rate */
     double duration_secs;
     int64_t total_samples;    /* the axis, as the bulk coordinator builds it */
-    int64_t end_samples;      /* where the stream ends, in sample positions */
     char *url;                /* for the re-open */
     AVDictionary *net_opts;   /* mpv's network options, for the re-open */
 };
@@ -88,8 +89,10 @@ struct feed_dec {
     bool loud_broken;  /* the layout changed: no measurement for this pass */
 #endif
     bool from_bof;     /* the pass started at the file's start */
-    bool pos_init;     /* a frame was placed */
+    bool pos_init;     /* a frame was seen */
+    bool anchored;     /* a frame was placed: the next go right after */
     int64_t emitted;   /* sequential source sample of the next frame */
+    int64_t first_pos; /* where the first frame was placed */
     double pkt_end;    /* where the last packet ended (NOPTS: unknown) */
     /* The batch of the cache replay being decoded. */
     struct demux_packet *batch[MAK_FEED_REPLAY_BATCH];
@@ -170,7 +173,8 @@ static bool fold_frame(struct feed_dec *d, struct feed_args *a, AVFrame *f)
     else
         frame_pos = d->pos_init ? d->emitted : 0;
     d->pos_init = true;
-    int64_t pos = d->emitted == 0 && frame_pos > 0 ? frame_pos : d->emitted;
+    int64_t pos = d->anchored ? d->emitted
+        : (frame_pos > 0 ? frame_pos : 0);
 
 #if MAK_FEED_LOUDNESS
     {
@@ -208,6 +212,9 @@ static bool fold_frame(struct feed_dec *d, struct feed_args *a, AVFrame *f)
     if (n <= 0)
         return n == 0;
     d->emitted = pos;
+    if (!d->anchored)
+        d->first_pos = pos;
+    d->anchored = true;
     mak_downmix_mono(d->buf, n, channels, d->mono);
     mak_waveform_fold_fed(d->mono, n, d->emitted, a->gen);
     d->emitted += n;
@@ -299,8 +306,8 @@ static MP_THREAD_VOID feed_main(void *p)
                 goto fail;
             /* Complete only if the decode reached the end of the stream: a
              * download cut short also ends with an end of file. */
-            complete = d.from_bof && d.pos_init &&
-                d.emitted >= a->end_samples -
+            complete = d.from_bof && d.anchored &&
+                d.emitted - d.first_pos >= a->total_samples -
                     (int64_t)(MAK_FEED_END_SLACK_SECS * a->rate);
             reopen = !complete;
             break;
@@ -405,11 +412,6 @@ bool mak_feed_start(int gen, struct demuxer *demuxer, struct sh_stream *audio,
     a->rate = par->sample_rate;
     a->duration_secs = duration_secs;
     a->total_samples = llround(duration_secs * 1e6) * a->rate / 1000000;
-    /* The packets carry the file's own timestamps, which start at its start
-     * time: a file starting at 10 s ends at 10 s plus the duration. */
-    double start = isfinite(demuxer->start_time) ? demuxer->start_time : 0;
-    a->end_samples = a->total_samples +
-        (start > 0 ? llround(start * a->rate) : 0);
     a->feed = mak_demux_feed_attach(demuxer, audio);
     if (!a->feed || !mak_waveform_arm_fed(gen, duration_secs, par->sample_rate)) {
         if (a->feed)
