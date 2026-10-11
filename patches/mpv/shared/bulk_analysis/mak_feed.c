@@ -57,6 +57,7 @@ struct feed_args {
     AVCodecParameters *par;
     AVRational tb;
     double duration_secs;
+    double end_secs;          /* where the stream ends, in its timestamps */
     char *url;                /* for the re-open */
     AVDictionary *net_opts;   /* mpv's network options, for the re-open */
 };
@@ -259,10 +260,10 @@ static MP_THREAD_VOID feed_main(void *p)
         if (item == MAK_FEED_EOF) {
             if (!decode(&d, a, NULL))
                 goto fail;
-            /* Complete only if the decode reached the duration: a download
-             * cut short also ends with an end of file. */
+            /* Complete only if the decode reached the end of the stream: a
+             * download cut short also ends with an end of file. */
             complete = d.from_bof && d.next_pts != MP_NOPTS_VALUE &&
-                d.next_pts >= a->duration_secs - MAK_FEED_END_SLACK_SECS;
+                d.next_pts >= a->end_secs - MAK_FEED_END_SLACK_SECS;
             reopen = !complete;
             break;
         }
@@ -362,6 +363,10 @@ bool mak_feed_start(int gen, struct demuxer *demuxer, struct sh_stream *audio,
         mp_setup_av_network_options(&a->net_opts, NULL, global, log);
     a->tb = mp_get_codec_timebase(audio->codec);
     a->duration_secs = duration_secs;
+    /* The packets carry the file's own timestamps, which start at its start
+     * time: a file starting at 10 s ends at 10 s plus the duration. */
+    a->end_secs = duration_secs +
+        (isfinite(demuxer->start_time) ? demuxer->start_time : 0);
     a->feed = mak_demux_feed_attach(demuxer, audio);
     if (!a->feed || !mak_waveform_arm_fed(gen, duration_secs, par->sample_rate)) {
         if (a->feed)
