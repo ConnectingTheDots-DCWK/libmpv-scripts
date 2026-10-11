@@ -501,6 +501,27 @@ static bool mak_exact_seek_format(const char *name)
     return false;
 }
 
+/* Whether a later worker decodes [id] like a sequential decode once its
+ * pre-roll is behind it, with frames the container indexes one by one. */
+static bool mak_exact_seek_codec(enum AVCodecID id)
+{
+    if (id >= AV_CODEC_ID_PCM_S16LE && id < AV_CODEC_ID_ADPCM_IMA_QT)
+        return true;   /* PCM */
+    switch (id) {
+    case AV_CODEC_ID_FLAC:
+    case AV_CODEC_ID_ALAC:
+    case AV_CODEC_ID_WAVPACK:
+    case AV_CODEC_ID_TTA:
+    case AV_CODEC_ID_APE:
+    case AV_CODEC_ID_AAC:
+    case AV_CODEC_ID_VORBIS:
+    case AV_CODEC_ID_OPUS:
+        return true;
+    default:
+        return false;
+    }
+}
+
 /* Case-insensitive match of a URL's scheme — the text before "://" — against
  * [want]. [sep] is strstr(url, "://") (the caller already computed it to test
  * is_network). Used to tell complete-file network schemes that tolerate
@@ -713,13 +734,13 @@ static MP_THREAD_VOID coordinator_main(void *p)
      * TTA, APE, CAF) whose time base resolves a sample. MP3, raw AAC, AC-3
      * and DTS seek by an estimated byte position, Matroska and ASF round
      * their timestamps to 1 ms: one sequential worker decodes them, so a
-     * local file gives the same result as one decode of it. So does ADPCM,
-     * whose decoder keeps a predictor from the blocks before (IMA in
-     * QuickTime only resets it on a large jump), so no pre-roll makes a
-     * later worker decode the same samples. */
-    enum AVCodecID cid = st->codecpar->codec_id;
-    bool adpcm = cid >= AV_CODEC_ID_ADPCM_IMA_QT && cid < AV_CODEC_ID_AMR_NB;
-    bool exact_seek = !adpcm && mak_exact_seek_format(fmt_name) &&
+     * local file gives the same result as one decode of it. The codec
+     * counts too: those containers can carry MP3, AC-3 or DTS (a DTS WAV
+     * seeks by byte), and ADPCM keeps a predictor from the blocks before
+     * (IMA in QuickTime only resets it on a large jump), so no pre-roll
+     * makes a later worker decode the same samples. */
+    bool exact_seek = mak_exact_seek_format(fmt_name) &&
+                      mak_exact_seek_codec(st->codecpar->codec_id) &&
                       st->time_base.num > 0 &&
                       (int64_t)st->time_base.num * sample_rate <=
                           (int64_t)st->time_base.den;
