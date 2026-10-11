@@ -6,10 +6,15 @@
 
 /* The most cached packets the attach replays. The replay holds the demuxer
  * lock on the core thread, about half a microsecond a packet on a desktop
- * (70 ms for the 138,000 packets of an hour of MP3), and playback is not
- * fed meanwhile. This keeps it near 15 ms there; a longer cache, which only
- * the analysis enabled late in a long file meets, re-opens instead. */
-#define MAK_FEED_MAX_REPLAY 32768
+ * (70 ms for the 138,000 packets of an hour of MP3), and the core thread
+ * does not feed the audio output meanwhile. While playback reads the stream
+ * (the analysis enabled late) the bound keeps it near 15 ms there. Before
+ * playback has read a packet, as at the load of a file that prefetch cached
+ * whole, the bound is larger: a longer stall there only delays the start,
+ * and re-opening would download the file a second time. A longer cache
+ * re-opens instead. */
+#define MAK_FEED_MAX_REPLAY_PLAYING 32768
+#define MAK_FEED_MAX_REPLAY_LOAD    262144
 
 struct mak_demux_feed *mak_demux_feed_attach(struct demuxer *demuxer,
                                              struct sh_stream *sh)
@@ -44,9 +49,12 @@ struct mak_demux_feed *mak_demux_feed_attach(struct demuxer *demuxer,
     bool has_bof = usable && q && q->range == in->current_range &&
                    (q->is_bof || (!q->head && in->after_seek_to_start)) &&
                    !(q->is_eof && !q->head);
+    bool playing = ds->last_ret_pos != -1 || ds->last_ret_dts != MP_NOPTS_VALUE;
+    size_t max_replay = playing ? MAK_FEED_MAX_REPLAY_PLAYING
+                                : MAK_FEED_MAX_REPLAY_LOAD;
     size_t cached = 0;
     for (struct demux_packet *dp = has_bof ? q->head : NULL; dp; dp = dp->next) {
-        if (++cached > MAK_FEED_MAX_REPLAY) {
+        if (++cached > max_replay) {
             has_bof = false;
             break;
         }
