@@ -44,10 +44,11 @@ enum mak_feed_item {
 /* Attach a feed of [sh]'s packets to [demuxer] (implemented in demux.c, so
  * it can walk the cache). Call on the core thread. Returns NULL, and the
  * caller re-opens the file instead, when the feed could not cover it whole:
- * no seekable cache, the cache on disk, a file larger than the forward cache,
- * a timeline (EDL, ordered chapters), or no cached range of the stream that
- * starts the file. A feed already attached to the demuxer is closed first.
- * Packet timestamps are the
+ * no seekable cache, the cache on disk, a file of unknown size or larger
+ * than the forward cache, a timeline (EDL, ordered chapters), or no cached
+ * range of the stream that starts the file. The demuxer cuts the feed later
+ * if its read-ahead stops before the end. A feed already attached to the
+ * demuxer is closed first. Packet timestamps are the
  * demuxer's own, before playback's start time offset, like the ones the bulk
  * decode reads from the file. */
 struct mak_demux_feed *mak_demux_feed_attach(struct demuxer *demuxer,

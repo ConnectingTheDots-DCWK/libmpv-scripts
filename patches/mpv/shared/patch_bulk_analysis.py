@@ -98,9 +98,9 @@ has to care which path produced the envelope:
     after the pass reaches the end). The file is downloaded once. When one
     clean pass is not possible (playback starting further in, any seek the
     cache cannot serve, an audio track switch, a cut download, the cache off
-    or on disk, a file larger than the forward cache, a timeline), the
-    generation goes to the single-worker re-open above, so the result is
-    never partial.
+    or on disk, a file of unknown size or larger than the forward cache, a
+    read-ahead that stops before the end, a timeline), the generation goes
+    to the single-worker re-open above, so the result is never partial.
 
   * **Adaptive / live source** (DASH/HLS — a Plex/Jellyfin transcode —
     or any non-seekable stream): PROGRESSIVE. The bulk path is invalid
@@ -403,6 +403,17 @@ DEMUX_EDITS = [
      '        mak_demux_feed_owner_release(in->mak_feed);\n'
      '        in->mak_feed = NULL;\n'
      '    }\n'),
+    ('read_packet read-ahead reached',
+     '    if (!read_more && !prefetch_more && !refresh_more) {\n'
+     '        in->hyst_active = !!in->hyst_secs;\n',
+     '    if (!read_more && !prefetch_more && !refresh_more) {\n'
+     '        /* ' + MARKER + ' ─── the read-ahead (cache-secs) is reached\n'
+     '         * before the end of the file: from now on the demuxer reads at\n'
+     '         * the playback pace, a few seconds ahead of it, and the analysis\n'
+     '         * would trail playback. The re-open takes over. */\n'
+     '        if (in->mak_feed && !in->eof)\n'
+     '            mak_demux_feed_cut(in->mak_feed);\n'
+     '        in->hyst_active = !!in->hyst_secs;\n'),
     ('mark_stream_eof',
      'static void mark_stream_eof(struct demux_stream *ds)\n'
      '{\n'

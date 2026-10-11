@@ -26,12 +26,16 @@ struct mak_demux_feed *mak_demux_feed_attach(struct demuxer *demuxer,
      * memory (a disk cache would be read back here under the lock), a file
      * the forward cache can hold (beyond it the demuxer only reads at the
      * playback pace), and a plain demuxer (a timeline's packets carry their
-     * own codec and segment bounds). */
+     * own codec and segment bounds). A size the stream does not report
+     * cannot be checked, so it re-opens too. The packet overhead the cache
+     * counts can still fill it short of the end of a file close to the
+     * limit: the rest then comes at the pace playback frees the cache,
+     * which still ends in one clean pass. */
     bool usable = in->seekable_cache && ds->selected &&
                   !in->d_user->opts->disk_cache &&
                   in->d_thread->desc != &demuxer_desc_timeline &&
-                  (in->stream_size <= 0 ||
-                   (uint64_t)in->stream_size <= (uint64_t)in->max_bytes);
+                  in->stream_size > 0 &&
+                  (uint64_t)in->stream_size <= (uint64_t)in->max_bytes;
     /* The cache must hold the start of the file, or be about to read it:
      * right after the open, the first read marks the queue as the start
      * (after_seek_to_start) only when it happens. */
