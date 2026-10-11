@@ -15,8 +15,9 @@
  *
  * Markers between packets tell the consumer what it cannot see from the
  * timestamps alone: BOF (the next packet starts the file), GAP (packets
- * before and after are not contiguous: another cached range, a seek past the
- * cache, a dropped packet) and EOF (the demuxer reached the end of the
+ * before and after are not contiguous: another cached range, any low-level
+ * seek of the demuxer, a dropped packet, a deselected stream, a cache that
+ * stopped reading ahead) and EOF (the demuxer reached the end of the
  * stream). */
 #ifndef MP_DEMUX_MAK_DEMUX_FEED_H_
 #define MP_DEMUX_MAK_DEMUX_FEED_H_
@@ -86,6 +87,20 @@ void mak_demux_feed_push_replay(struct mak_demux_feed *f,
 
 /* Queue a marker. */
 void mak_demux_feed_mark(struct mak_demux_feed *f, enum mak_feed_item item);
+
+/* The demuxer is about to read from another position (any low-level seek: a
+ * seek past the cache, a cache range resumed or joined, a track refresh).
+ * Once a packet went out, nothing read after it can be trusted to continue
+ * it, so the feed is cut (see mak_demux_feed_cut); before the first packet
+ * the next one still decides, through [bof], whether the pass starts the
+ * file. */
+void mak_demux_feed_seek(struct mak_demux_feed *f);
+
+/* The pass can no longer cover the file at the pace of the download (the
+ * fed stream was deselected, or the cache stopped reading ahead): queue a GAP
+ * now, so the consumer hands over to the re-open without waiting for the next
+ * packet, and take no more packets. The next push returns false. */
+void mak_demux_feed_cut(struct mak_demux_feed *f);
 
 /* The demuxer is going away, or detaches the feed: drop its reference. */
 void mak_demux_feed_owner_release(struct mak_demux_feed *f);

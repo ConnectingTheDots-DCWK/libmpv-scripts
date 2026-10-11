@@ -11,9 +11,9 @@
  * the generation, and turns READY when one pass ran from the start of the
  * file to its end without a gap; the loudness scan (when its patch is in)
  * rides the same decode. When the pass cannot be clean (playback started
- * past the start, a seek past the cache, a cut download), the generation is
- * handed to the re-open of mak_scan.c, which downloads the file again as
- * before, so the result is never partial. */
+ * past the start, a seek the cache cannot serve, a track switch, a cut
+ * download), the generation is handed to the re-open of mak_scan.c, which
+ * downloads the file again as before, so the result is never partial. */
 #ifndef MP_AUDIO_MAK_FEED_H_
 #define MP_AUDIO_MAK_FEED_H_
 

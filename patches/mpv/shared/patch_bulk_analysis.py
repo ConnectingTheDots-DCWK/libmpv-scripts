@@ -96,10 +96,11 @@ has to care which path produced the envelope:
     mpv downloads it, and a thread of its own decodes them into the same
     bins (state `progressive` while it fills, af-tap fold off, `ready`
     after the pass reaches the end). The file is downloaded once. When one
-    clean pass is not possible (playback starting further in, a seek past
-    the cache, a cut download, the cache off or on disk, a file larger than
-    the forward cache, a timeline), the generation goes to the single-worker
-    re-open above, so the result is never partial.
+    clean pass is not possible (playback starting further in, any seek the
+    cache cannot serve, an audio track switch, a cut download, the cache off
+    or on disk, a file larger than the forward cache, a timeline), the
+    generation goes to the single-worker re-open above, so the result is
+    never partial.
 
   * **Adaptive / live source** (DASH/HLS — a Plex/Jellyfin transcode —
     or any non-seekable stream): PROGRESSIVE. The bulk path is invalid
@@ -416,6 +417,30 @@ DEMUX_EDITS = [
      '        if (ds->in->mak_feed && !demux_cancel_test(ds->in->d_thread) &&\n'
      '            ds->index == mak_demux_feed_stream(ds->in->mak_feed))\n'
      '            mak_demux_feed_mark(ds->in->mak_feed, MAK_FEED_EOF);\n'),
+    ('execute_seek',
+     'static void execute_seek(struct demux_internal *in)\n'
+     '{\n'
+     '    int flags = in->seek_flags;\n'
+     '    double pts = in->seek_pts;\n',
+     'static void execute_seek(struct demux_internal *in)\n'
+     '{\n'
+     '    int flags = in->seek_flags;\n'
+     '    double pts = in->seek_pts;\n'
+     '    /* ' + MARKER + ' ─── every low-level seek, whatever asked for it\n'
+     '     * (the user, a cache range resumed or joined, a track refresh),\n'
+     '     * breaks the continuity the analysis feed relies on. */\n'
+     '    if (in->mak_feed)\n'
+     '        mak_demux_feed_seek(in->mak_feed);\n'),
+    ('demuxer_select_track',
+     '        ds->selected = selected;\n'
+     '        update_stream_selection_state(in, ds);\n',
+     '        ds->selected = selected;\n'
+     '        /* ' + MARKER + ' ─── a deselected fed stream gets no more\n'
+     '         * packets and loses its cache: the pass cannot go on. */\n'
+     '        if (!selected && in->mak_feed &&\n'
+     '            stream->index == mak_demux_feed_stream(in->mak_feed))\n'
+     '            mak_demux_feed_cut(in->mak_feed);\n'
+     '        update_stream_selection_state(in, ds);\n'),
     ('demux_dealloc',
      'static void demux_dealloc(struct demux_internal *in)\n'
      '{\n',

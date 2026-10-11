@@ -33,6 +33,7 @@ struct mak_demux_feed {
     size_t bytes;
     bool consumer_closed;
     bool owner_gone;
+    bool cut;           /* a GAP ends the pass: no more packets */
     /* Demuxer side only (under the demuxer's lock). */
     const void *last_queue;
     bool any_packet;
@@ -100,7 +101,7 @@ static bool push_owned(struct mak_demux_feed *f, struct demux_packet *dp,
                        const void *queue_id, bool bof, bool bounded)
 {
     mp_mutex_lock(&f->lock);
-    if (f->consumer_closed) {
+    if (f->consumer_closed || f->cut) {
         mp_mutex_unlock(&f->lock);
         if (dp)
             free_demux_packet(dp);
@@ -152,8 +153,33 @@ void mak_demux_feed_push_replay(struct mak_demux_feed *f,
 void mak_demux_feed_mark(struct mak_demux_feed *f, enum mak_feed_item item)
 {
     mp_mutex_lock(&f->lock);
-    if (!f->consumer_closed)
+    if (!f->consumer_closed && !f->cut)
         append_locked(f, item, NULL);
+    mp_mutex_unlock(&f->lock);
+}
+
+static void cut_locked(struct mak_demux_feed *f)
+{
+    if (f->consumer_closed || f->cut)
+        return;
+    append_locked(f, MAK_FEED_GAP, NULL);
+    f->cut = true;
+}
+
+void mak_demux_feed_seek(struct mak_demux_feed *f)
+{
+    mp_mutex_lock(&f->lock);
+    if (f->any_packet)
+        cut_locked(f);
+    else
+        f->gap_pending = true;
+    mp_mutex_unlock(&f->lock);
+}
+
+void mak_demux_feed_cut(struct mak_demux_feed *f)
+{
+    mp_mutex_lock(&f->lock);
+    cut_locked(f);
     mp_mutex_unlock(&f->lock);
 }
 
