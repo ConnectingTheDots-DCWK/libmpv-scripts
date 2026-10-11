@@ -478,13 +478,35 @@ DEMUX_EDITS = [
      '            stream->index == mak_demux_feed_stream(in->mak_feed))\n'
      '            mak_demux_feed_cut(in->mak_feed);\n'
      '        update_stream_selection_state(in, ds);\n'),
+    ('demux_shutdown',
+     'static void demux_shutdown(struct demux_internal *in)\n'
+     '{\n'
+     '    struct demuxer *demuxer = in->d_user;\n',
+     'static void demux_shutdown(struct demux_internal *in)\n'
+     '{\n'
+     '    struct demuxer *demuxer = in->d_user;\n'
+     '\n'
+     '    /* ' + MARKER + ' ─── the flush below frees the cache ranges and\n'
+     '     * their queues, without the lock, and on the demux thread when the\n'
+     '     * demuxer is freed asynchronously (stop, playlist advance), long\n'
+     '     * before demux_dealloc(). Let go of the feed first: killing the\n'
+     '     * guard waits for a replay batch in progress, and the next one\n'
+     '     * finds the demuxer gone. Not under the lock: the guard comes\n'
+     '     * first in the lock order. */\n'
+     '    if (in->mak_guard)\n'
+     '        mak_feed_guard_kill(in->mak_guard);\n'
+     '    in->mak_guard = NULL;\n'
+     '    if (in->mak_feed)\n'
+     '        mak_demux_feed_owner_release(in->mak_feed);\n'
+     '    in->mak_feed = NULL;\n'),
     ('demux_dealloc',
      'static void demux_dealloc(struct demux_internal *in)\n'
      '{\n',
      'static void demux_dealloc(struct demux_internal *in)\n'
      '{\n'
-     '    /* ' + MARKER + ' ─── the demux thread is stopped: no more pushes,\n'
-     '     * and once a replay batch in progress ends, no more replay. */\n'
+     '    /* ' + MARKER + ' ─── the demux thread is stopped: no more pushes.\n'
+     '     * demux_shutdown() already let go of the feed; this covers a\n'
+     '     * demuxer freed without it. */\n'
      '    if (in->mak_guard)\n'
      '        mak_feed_guard_kill(in->mak_guard);\n'
      '    in->mak_guard = NULL;\n'
