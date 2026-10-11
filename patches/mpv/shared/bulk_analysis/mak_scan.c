@@ -205,7 +205,10 @@ static bool measure_pts_offset(AVFormatContext *fmt, AVCodecContext *dec,
     int64_t emitted = 0;
     int64_t prev = 0;
     int frames = 0;
-    while (frames < 16) {
+    /* Bounded by packets too: a decoder that never yields a frame, or a
+     * file whose other streams come first, must not be read whole here. */
+    for (int packets = 0, reads = 0;
+         frames < 16 && packets < 64 && reads < 1024; reads++) {
         if (mak_waveform_current_gen() != a->my_gen)
             return false;
         int ret = av_read_frame(fmt, pkt);
@@ -215,6 +218,7 @@ static bool measure_pts_offset(AVFormatContext *fmt, AVCodecContext *dec,
             av_packet_unref(pkt);
             continue;
         }
+        packets++;
         ret = avcodec_send_packet(dec, pkt);
         av_packet_unref(pkt);
         if (ret < 0)
