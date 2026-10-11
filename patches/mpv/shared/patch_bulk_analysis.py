@@ -393,8 +393,10 @@ DEMUX_EDITS = [
      '    struct mp_recorder *dumper;\n'
      '    int dumper_status;\n'
      '\n'
-     '    /* ' + MARKER + ' ─── the bulk analysis packet feed, if attached. */\n'
-     '    struct mak_demux_feed *mak_feed;\n'),
+     '    /* ' + MARKER + ' ─── the bulk analysis packet feed, if attached,\n'
+     '     * and the guard its consumer reaches the cache through. */\n'
+     '    struct mak_demux_feed *mak_feed;\n'
+     '    struct mak_feed_guard *mak_guard;\n'),
     ('add_packet_locked push',
      '    record_packet(in, dp);\n',
      '    record_packet(in, dp);\n'
@@ -455,6 +457,17 @@ DEMUX_EDITS = [
      '     * breaks the continuity the analysis feed relies on. */\n'
      '    if (in->mak_feed)\n'
      '        mak_demux_feed_seek(in->mak_feed);\n'),
+    ('switch_current_range',
+     'static void switch_current_range(struct demux_internal *in,\n'
+     '                                 struct demux_cached_range *range)\n'
+     '{\n',
+     'static void switch_current_range(struct demux_internal *in,\n'
+     '                                 struct demux_cached_range *range)\n'
+     '{\n'
+     '    /* ' + MARKER + ' ─── the range the feed follows is left, and may\n'
+     '     * be freed below: cut before a replay could reach its queue. */\n'
+     '    if (in->mak_feed)\n'
+     '        mak_demux_feed_seek(in->mak_feed);\n'),
     ('demuxer_select_track',
      '        ds->selected = selected;\n'
      '        update_stream_selection_state(in, ds);\n',
@@ -470,7 +483,11 @@ DEMUX_EDITS = [
      '{\n',
      'static void demux_dealloc(struct demux_internal *in)\n'
      '{\n'
-     '    /* ' + MARKER + ' ─── the demux thread is stopped: no more pushes. */\n'
+     '    /* ' + MARKER + ' ─── the demux thread is stopped: no more pushes,\n'
+     '     * and once a replay batch in progress ends, no more replay. */\n'
+     '    if (in->mak_guard)\n'
+     '        mak_feed_guard_kill(in->mak_guard);\n'
+     '    in->mak_guard = NULL;\n'
      '    if (in->mak_feed)\n'
      '        mak_demux_feed_owner_release(in->mak_feed);\n'
      '    in->mak_feed = NULL;\n'),

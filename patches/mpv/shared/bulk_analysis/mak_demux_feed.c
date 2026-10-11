@@ -21,7 +21,14 @@
 struct feed_item {
     enum mak_feed_item kind;
     struct demux_packet *dp;
+    size_t size;        /* what [dp] counts in the budget */
     struct feed_item *next;
+};
+
+struct mak_feed_guard {
+    mp_mutex lock;
+    atomic_int refs;
+    void *owner;        /* NULL once the demuxer is gone */
 };
 
 struct mak_demux_feed {
@@ -38,7 +45,54 @@ struct mak_demux_feed {
     const void *last_queue;
     bool any_packet;
     bool gap_pending;
+    /* Consumer side, see mak_demux_feed_replay(). */
+    struct mak_feed_replay replay;
 };
+
+struct mak_feed_guard *mak_feed_guard_new(void *owner)
+{
+    struct mak_feed_guard *g = calloc(1, sizeof(*g));
+    if (!g)
+        return NULL;
+    mp_mutex_init(&g->lock);
+    atomic_init(&g->refs, 1);   /* the demuxer's */
+    g->owner = owner;
+    return g;
+}
+
+void mak_feed_guard_ref(struct mak_feed_guard *g)
+{
+    atomic_fetch_add(&g->refs, 1);
+}
+
+void mak_feed_guard_unref(struct mak_feed_guard *g)
+{
+    if (!g || atomic_fetch_sub(&g->refs, 1) != 1)
+        return;
+    mp_mutex_destroy(&g->lock);
+    free(g);
+}
+
+void mak_feed_guard_kill(struct mak_feed_guard *g)
+{
+    /* Waits for a replay batch in progress: after this no consumer reaches
+     * the demuxer through the guard. */
+    mp_mutex_lock(&g->lock);
+    g->owner = NULL;
+    mp_mutex_unlock(&g->lock);
+    mak_feed_guard_unref(g);
+}
+
+void *mak_feed_guard_lock(struct mak_feed_guard *g)
+{
+    mp_mutex_lock(&g->lock);
+    return g->owner;
+}
+
+void mak_feed_guard_unlock(struct mak_feed_guard *g)
+{
+    mp_mutex_unlock(&g->lock);
+}
 
 static void feed_unref(struct mak_demux_feed *f)
 {
@@ -52,6 +106,7 @@ static void feed_unref(struct mak_demux_feed *f)
         free(it);
         it = next;
     }
+    mak_feed_guard_unref(f->replay.guard);
     mp_cond_destroy(&f->wakeup);
     mp_mutex_destroy(&f->lock);
     free(f);
@@ -69,13 +124,13 @@ static bool append_locked(struct mak_demux_feed *f, enum mak_feed_item kind,
     }
     it->kind = kind;
     it->dp = dp;
+    it->size = dp ? demux_packet_estimate_total_size(dp) : 0;
     if (f->tail)
         f->tail->next = it;
     else
         f->head = it;
     f->tail = it;
-    if (dp)
-        f->bytes += dp->len;
+    f->bytes += it->size;
     mp_cond_signal(&f->wakeup);
     return true;
 }
@@ -97,8 +152,32 @@ int mak_demux_feed_stream(const struct mak_demux_feed *f)
     return f->stream_index;
 }
 
+struct mak_feed_replay *mak_demux_feed_replay_state(struct mak_demux_feed *f)
+{
+    return &f->replay;
+}
+
+void mak_demux_feed_continue(struct mak_demux_feed *f, const void *queue_id,
+                             bool replayed)
+{
+    if (!replayed)
+        return;   /* the first push decides, with its BOF */
+    mp_mutex_lock(&f->lock);
+    f->last_queue = queue_id;
+    f->any_packet = true;
+    mp_mutex_unlock(&f->lock);
+}
+
+bool mak_demux_feed_ended(struct mak_demux_feed *f)
+{
+    mp_mutex_lock(&f->lock);
+    bool ended = f->cut || f->consumer_closed;
+    mp_mutex_unlock(&f->lock);
+    return ended;
+}
+
 static bool push_owned(struct mak_demux_feed *f, struct demux_packet *dp,
-                       const void *queue_id, bool bof, bool bounded)
+                       const void *queue_id, bool bof)
 {
     mp_mutex_lock(&f->lock);
     if (f->consumer_closed || f->cut) {
@@ -107,7 +186,8 @@ static bool push_owned(struct mak_demux_feed *f, struct demux_packet *dp,
             free_demux_packet(dp);
         return false;
     }
-    if (!dp || (bounded && f->bytes + dp->len > MAK_FEED_MAX_BYTES)) {
+    if (!dp || f->bytes + demux_packet_estimate_total_size(dp) >
+                   MAK_FEED_MAX_BYTES) {
         /* Out of memory or over budget: the packet is lost, so whatever
          * comes next no longer continues what came before. */
         if (dp)
@@ -140,14 +220,7 @@ bool mak_demux_feed_push(struct mak_demux_feed *f, struct demux_packet *dp,
      * after this point; the cached copies the replay reads already have it. */
     if (copy && copy->pts == MP_NOPTS_VALUE)
         copy->pts = copy->dts;
-    return push_owned(f, copy, queue_id, bof, true);
-}
-
-void mak_demux_feed_push_replay(struct mak_demux_feed *f,
-                                struct demux_packet *dp,
-                                const void *queue_id, bool bof)
-{
-    push_owned(f, dp, queue_id, bof, false);
+    return push_owned(f, copy, queue_id, bof);
 }
 
 void mak_demux_feed_mark(struct mak_demux_feed *f, enum mak_feed_item item)
@@ -215,8 +288,7 @@ enum mak_feed_item mak_demux_feed_pop(struct mak_demux_feed *f,
     f->head = it->next;
     if (!f->head)
         f->tail = NULL;
-    if (it->dp)
-        f->bytes -= it->dp->len;
+    f->bytes -= it->size;
     mp_mutex_unlock(&f->lock);
     enum mak_feed_item kind = it->kind;
     *out = it->dp;

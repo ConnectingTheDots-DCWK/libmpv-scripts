@@ -43,6 +43,10 @@
  * again: a superseded engine exits within this. */
 #define MAK_FEED_POLL_NS MP_TIME_MS_TO_NS(100)
 
+/* Packets copied from the cache per batch, each under the demuxer's lock
+ * for a few tens of microseconds. */
+#define MAK_FEED_REPLAY_BATCH 64
+
 /* A packet timestamp further than this from where the last packet ended is a
  * discontinuity the markers did not show (ranges joined, a reused queue). */
 #define MAK_FEED_JUMP_SECS 1.0
@@ -87,6 +91,10 @@ struct feed_dec {
     bool pos_init;     /* a frame was placed */
     int64_t emitted;   /* sequential source sample of the next frame */
     double pkt_end;    /* where the last packet ended (NOPTS: unknown) */
+    /* The batch of the cache replay being decoded. */
+    struct demux_packet *batch[MAK_FEED_REPLAY_BATCH];
+    int batch_n, batch_i;
+    bool replayed;     /* the replay is over: pop the feed */
 };
 
 /* (Re)builds the converter when the decoded format changes. */
@@ -256,8 +264,24 @@ static MP_THREAD_VOID feed_main(void *p)
 
     while (mak_waveform_current_gen() == a->gen) {
         struct demux_packet *dp = NULL;
-        enum mak_feed_item item = mak_demux_feed_pop(a->feed, &dp,
-                                                     MAK_FEED_POLL_NS);
+        enum mak_feed_item item;
+        if (d.batch_i < d.batch_n) {
+            /* The packets the cache held at the attach come first. */
+            item = MAK_FEED_PACKET;
+            dp = d.batch[d.batch_i++];
+        } else if (!d.replayed) {
+            d.batch_i = 0;
+            item = mak_demux_feed_replay(a->feed, d.batch,
+                                         MAK_FEED_REPLAY_BATCH, &d.batch_n);
+            if (item == MAK_FEED_PACKET)
+                continue;
+            if (item == MAK_FEED_REPLAYED) {
+                d.replayed = true;
+                continue;
+            }
+        } else {
+            item = mak_demux_feed_pop(a->feed, &dp, MAK_FEED_POLL_NS);
+        }
         if (item == MAK_FEED_TIMEOUT)
             continue;
         if (item == MAK_FEED_CLOSED)
@@ -327,6 +351,8 @@ fail:
 #endif
 
 done:
+    for (int i = d.batch_i; i < d.batch_n; i++)
+        free_demux_packet(d.batch[i]);
 #if MAK_FEED_LOUDNESS
     loud_drop(&d);
 #endif
