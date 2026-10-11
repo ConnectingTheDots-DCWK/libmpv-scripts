@@ -145,12 +145,14 @@ def patch_mak_scan_c(path):
          '    int     stream_pos_initialized = 0;\n'
          '    /* ' + MARKER + ' ─── decode up to the slice end rounded to the\n'
          '     * next 100 ms grid boundary so the trailing sub-block completes\n'
-         '     * (≤ one hop of extra decode; the bin filter is unaffected). */\n'
-         '    int64_t decode_end = a->loud\n'
-         '        ? mak_loud_worker_decode_end(a->loud) : a->sample_end;'),
+         '     * (≤ one hop of extra decode; the bin filter is unaffected), and\n'
+         '     * at least to the end of the worker\'s bins. */\n'
+         '    int64_t decode_end = a->wave_end;\n'
+         '    if (a->loud && mak_loud_worker_decode_end(a->loud) > decode_end)\n'
+         '        decode_end = mak_loud_worker_decode_end(a->loud);'),
 
         ('worker early-stop #1 uses decode_end',
-         '            if (frame_seq_pos >= a->sample_end) {',
+         '            if (frame_seq_pos >= a->wave_end) {',
          '            if (frame_seq_pos >= decode_end) {'),
 
         ('worker feed before early stop',
@@ -168,7 +170,7 @@ def patch_mak_scan_c(path):
          '            /* Stop early once the frame starts past our region. */'),
 
         ('worker early-stop #2 uses decode_end',
-         '            if (emitted_samples >= a->sample_end) goto done_decode;',
+         '            if (emitted_samples >= a->wave_end) goto done_decode;',
          '            if (emitted_samples >= decode_end) goto done_decode;'),
 
         ('worker finish slice',

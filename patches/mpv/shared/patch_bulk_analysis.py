@@ -85,7 +85,11 @@ has to care which path produced the envelope:
   * **Complete, seekable file** (local OR an HTTP byte-range file such as
     a Plex/Jellyfin direct-play part): the bulk path. Workers seek to
     disjoint regions and the full envelope lands at once (state `ready`).
-    Local files fan out to all workers; an HTTP file uses ONE worker —
+    Local files fan out to all workers when their format seeks to an exact
+    sample (FLAC, WAV, AIFF, MP4, Ogg, WavPack, TTA, APE, CAF, not ADPCM);
+    each later worker decodes a pre-roll before its region and places
+    frames where one sequential decode would, so the result is the same.
+    Other formats, and an HTTP file, use ONE worker —
     re-opening a signed / connection-capped URL N times can throttle or
     desync, so a single sequential reader is the safe choice.
 

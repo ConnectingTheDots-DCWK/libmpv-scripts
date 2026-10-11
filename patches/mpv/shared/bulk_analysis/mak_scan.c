@@ -94,6 +94,12 @@ struct worker_chunk {
     int64_t  total_samples;
     int64_t  sample_start;       /* inclusive, in source sample-frame units */
     int64_t  sample_end;         /* exclusive */
+    /* The first sample this worker must place, the earlier of its loudness
+     * slice and its first bin, and one past the last, the first sample of the
+     * next worker's first bin. A worker decodes [need_start, wave_end) at
+     * least; what it decodes around that is pre-roll. */
+    int64_t  need_start;
+    int64_t  wave_end;
     int64_t  time_base_num;
     int64_t  time_base_den;
     /* Output slice. total_bins is the global envelope size; the
@@ -185,6 +191,54 @@ static int open_source(AVFormatContext **fmt, const char *url,
     return ret;
 }
 
+/* The offset between a frame's timestamp and its place in a sequential
+ * decode of the file, in samples. The two differ by what the decoder drops
+ * at the start (an MP3's encoder delay, an AAC priming): worker 0 counts
+ * samples from the first frame, so its positions trail the timestamps by
+ * that much. Decodes the first frames of the freshly opened [fmt] the way
+ * worker 0 places them and returns the offset once two frames agree. */
+static bool measure_pts_offset(AVFormatContext *fmt, AVCodecContext *dec,
+                               AVPacket *pkt, AVFrame *frame,
+                               const struct worker_chunk *a, int64_t *out)
+{
+    int64_t emitted = 0;
+    int64_t prev = 0;
+    int frames = 0;
+    while (frames < 16) {
+        if (mak_waveform_current_gen() != a->my_gen)
+            return false;
+        int ret = av_read_frame(fmt, pkt);
+        if (ret < 0)
+            return false;
+        if (pkt->stream_index != a->audio_idx) {
+            av_packet_unref(pkt);
+            continue;
+        }
+        ret = avcodec_send_packet(dec, pkt);
+        av_packet_unref(pkt);
+        if (ret < 0)
+            continue;
+        while (avcodec_receive_frame(dec, frame) >= 0) {
+            bool ok = frame->pts != AV_NOPTS_VALUE && frame->nb_samples > 0;
+            int64_t pos = ok ? av_rescale(frame->pts,
+                a->sample_rate * a->time_base_num, a->time_base_den) : 0;
+            int n = frame->nb_samples;
+            av_frame_unref(frame);
+            if (!ok)
+                return false;
+            int64_t seq = emitted == 0 && pos > 0 ? pos : emitted;
+            int64_t d = pos - seq;
+            emitted = seq + n;
+            if (++frames >= 3 && d == prev) {
+                *out = d;
+                return true;
+            }
+            prev = d;
+        }
+    }
+    return false;
+}
+
 static MP_THREAD_VOID worker_chunk_thread(void *p)
 {
     struct worker_chunk *a = p;
@@ -242,14 +296,41 @@ static MP_THREAD_VOID worker_chunk_thread(void *p)
     mono_buf = av_malloc((size_t)out_buf_capacity * sizeof(float));
     if (!out_buf || !mono_buf) goto cleanup;
 
-    /* Seek to the assigned region (skipped for the first worker
-     * which already starts at sample 0). AV_TIME_BASE units; the
-     * BACKWARD flag lands us on the nearest preceding keyframe. */
+    /* A later worker places each frame at its timestamp less the offset
+     * worker 0's sequential count trails the timestamps by, so every worker
+     * puts a sample where one decode of the whole file would. The
+     * coordinator only fans out a format whose timestamps after a seek are
+     * sample-exact. Without a measurable offset the worker falls back to
+     * counting from its first frame. */
+    bool    from_pts   = false;
+    int64_t pts_offset = 0;
     if (a->sample_start > 0) {
-        int64_t seek_us = a->sample_start * 1000000 / a->sample_rate;
+        from_pts = measure_pts_offset(fmt, dec, pkt, iframe, a, &pts_offset);
+        avcodec_flush_buffers(dec);
+    }
+
+    /* Pre-roll: a later worker starts decoding [back] samples before the
+     * first one it places, so the decoder (an MP3's bit reservoir, the
+     * overlap of AAC and Vorbis, Opus's 80 ms of state) and the loudness
+     * filters have settled when its region starts. The first frame after
+     * the seek must land at least [prime] samples before the region, or
+     * the seek goes [back] four times further back, down to the start. */
+    int64_t prime = a->sample_rate / 10;
+    if (a->codecpar->seek_preroll > prime)
+        prime = a->codecpar->seek_preroll;
+    int64_t back = a->sample_rate / 2;
+    if (2 * prime > back)
+        back = 2 * prime;
+    bool checking = false;
+reseek:
+    if (a->sample_start > 0) {
+        int64_t target = a->need_start - back + pts_offset;
+        int64_t seek_us = target > 0
+            ? target * 1000000 / a->sample_rate : 0;
         if (av_seek_frame(fmt, -1, seek_us, AVSEEK_FLAG_BACKWARD) < 0)
             goto cleanup;
         avcodec_flush_buffers(dec);
+        checking = target > 0;
     }
 
     int64_t emitted_samples = 0;
@@ -298,9 +379,21 @@ static MP_THREAD_VOID worker_chunk_thread(void *p)
             int64_t frame_seq_pos =
                 emitted_samples == 0 && frame_sample_pos > 0
                     ? frame_sample_pos : emitted_samples;
+            if (from_pts && iframe->pts != AV_NOPTS_VALUE)
+                frame_seq_pos = frame_sample_pos - pts_offset;
+
+            /* The seek must have left room for the pre-roll. */
+            if (checking) {
+                checking = false;
+                if (frame_seq_pos > a->need_start - prime) {
+                    av_frame_unref(iframe);
+                    back *= 4;
+                    goto reseek;
+                }
+            }
 
             /* Stop early once the frame starts past our region. */
-            if (frame_seq_pos >= a->sample_end) {
+            if (frame_seq_pos >= a->wave_end) {
                 av_frame_unref(iframe);
                 goto done_decode;
             }
@@ -323,10 +416,8 @@ static MP_THREAD_VOID worker_chunk_thread(void *p)
             av_frame_unref(iframe);
             if (converted <= 0) continue;
 
-            /* Initialize emitted_samples to the first frame's
-             * absolute position after the seek. */
-            if (emitted_samples == 0 && frame_sample_pos > 0)
-                emitted_samples = frame_sample_pos;
+            /* Count on from where the frame was placed. */
+            emitted_samples = frame_seq_pos;
 
             mak_downmix_mono(out_buf, converted, channels, mono_buf);
             process_samples(mono_buf, converted,
@@ -339,7 +430,7 @@ static MP_THREAD_VOID worker_chunk_thread(void *p)
                     atomic_load_explicit(a->abort, memory_order_relaxed))
                     goto cleanup;
             }
-            if (emitted_samples >= a->sample_end) goto done_decode;
+            if (emitted_samples >= a->wave_end) goto done_decode;
         }
     }
 done_decode:
@@ -384,6 +475,25 @@ static int coord_interrupt_cb(void *opaque)
 {
     int my_gen = *(int *)opaque;
     return mak_waveform_current_gen() != my_gen;
+}
+
+/* Whether lavf's demuxer [name] (a comma list such as "mov,mp4,m4a,...")
+ * seeks to a sample-exact position with sample-exact timestamps. */
+static bool mak_exact_seek_format(const char *name)
+{
+    static const char *const exact[] = {
+        "flac", "wav", "w64", "aiff", "mov", "mp4", "ogg", "wv", "tta",
+        "ape", "caf",
+    };
+    while (name && *name) {
+        size_t n = strcspn(name, ",");
+        for (size_t i = 0; i < sizeof(exact) / sizeof(exact[0]); i++) {
+            if (strlen(exact[i]) == n && !strncmp(name, exact[i], n))
+                return true;
+        }
+        name += n + (name[n] == ',');
+    }
+    return false;
 }
 
 /* Case-insensitive match of a URL's scheme — the text before "://" — against
@@ -590,7 +700,23 @@ static MP_THREAD_VOID coordinator_main(void *p)
      * sequential reader is the safe choice. The partition below and both the
      * envelope and loudness merges are worker-count-agnostic (disjoint slices),
      * so the count only trades parallelism for connections. */
-    int nworkers = fanout_ok ? MAK_WAVEFORM_WORKERS : 1;
+    /* Workers past the first place their frames by timestamp after a seek,
+     * which only lands sample by sample where a seek and its timestamps are
+     * exact: formats indexed by sample (FLAC, WAV, AIFF, MP4, Ogg, WavPack,
+     * TTA, APE, CAF) whose time base resolves a sample. MP3, raw AAC, AC-3
+     * and DTS seek by an estimated byte position, Matroska and ASF round
+     * their timestamps to 1 ms: one sequential worker decodes them, so a
+     * local file gives the same result as one decode of it. So does ADPCM,
+     * whose decoder keeps a predictor from the blocks before (IMA in
+     * QuickTime only resets it on a large jump), so no pre-roll makes a
+     * later worker decode the same samples. */
+    enum AVCodecID cid = st->codecpar->codec_id;
+    bool adpcm = cid >= AV_CODEC_ID_ADPCM_IMA_QT && cid < AV_CODEC_ID_AMR_NB;
+    bool exact_seek = !adpcm && mak_exact_seek_format(fmt_name) &&
+                      st->time_base.num > 0 &&
+                      (int64_t)st->time_base.num * sample_rate <=
+                          (int64_t)st->time_base.den;
+    int nworkers = fanout_ok && exact_seek ? MAK_WAVEFORM_WORKERS : 1;
 
     /* Fixed bin count, clamped down for tracks shorter than the
      * target resolution. Allocate the global min/max/energy arrays. */
@@ -619,6 +745,10 @@ static MP_THREAD_VOID coordinator_main(void *p)
 
         int bs = (int)((int64_t)bins * w / nworkers);
         int be = (int)((int64_t)bins * (w + 1) / nworkers);
+        /* First sample of bin bs and of bin be (the bin of sample e is
+         * e * bins / total_samples, rounded down). */
+        int64_t bin_first = ((int64_t)bs * total_samples + bins - 1) / bins;
+        int64_t bin_next  = ((int64_t)be * total_samples + bins - 1) / bins;
 
         chunks[w] = (struct worker_chunk){
             .my_gen        = my_gen,
@@ -633,6 +763,8 @@ static MP_THREAD_VOID coordinator_main(void *p)
             .total_samples = total_samples,
             .sample_start  = ss,
             .sample_end    = se,
+            .need_start    = ss < bin_first ? ss : bin_first,
+            .wave_end      = w + 1 == nworkers ? total_samples : bin_next,
             .time_base_num = st->time_base.num,
             .time_base_den = st->time_base.den,
             .total_bins    = bins,

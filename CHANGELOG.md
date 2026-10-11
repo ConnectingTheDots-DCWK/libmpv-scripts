@@ -10,6 +10,7 @@
 - A new audio filter whose first input is the end of the stream, as during the refresh seek of `patch_chain_eof.py`, passes it on and waits for data instead of building on a dummy float format. A filter that takes no float, such as `hdcd`, was disabled for good (`patch_lavfi_eof_passthrough.py`).
 - PipeWire and PulseAudio stay loaded until the process exits: the stubs unloaded them from an exit handler, under the audio thread of an app that exits without destroying the player.
 - The loudness scan of a Matroska file no longer reads -70 LUFS with no gated block: it placed each frame at its timestamp, rounded to 1 ms, so no 100 ms block was complete. It now counts samples from the first frame, as the waveform does, and the waveform of an MP3 no longer ends one encoder delay short.
+- The analysis of a local file gives the result of one decode of it. The parallel workers seeked to their region with no pre-roll and placed it by its timestamp, so loudness and peaks drifted at each boundary (WebM -21.78 against -21.74 LUFS, an MP3 peak of 0.101 against 0.084). Each worker now decodes half a second before its region, formats whose seek is not sample exact use one worker, and every fixture gives the bins and loudness of one decode.
 - The loudness scan of an MP2 file no longer crashes the process or reads garbage peaks: it converted the decoded samples as the probe's sample format, float, while the decoder outputs 16 bit.
 
 ### Changed
