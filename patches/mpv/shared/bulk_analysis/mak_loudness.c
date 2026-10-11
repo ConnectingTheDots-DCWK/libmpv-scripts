@@ -163,6 +163,7 @@ static inline double true_peak_run(const struct true_peak_fir *f,
 struct mak_loud_worker {
     SwrContext *swr;             /* source layout → FLT interleaved */
     int         channels;
+    int         in_format;       /* the sample format [swr] converts from */
     int         rate;
     double      ch_weight[MAK_LOUD_MAX_CH];
 
@@ -220,6 +221,7 @@ struct mak_loud_worker *mak_loud_worker_create(
     if (!w) return NULL;
 
     w->channels = par->ch_layout.nb_channels;
+    w->in_format = par->format;
     w->rate     = sample_rate;
     w->hop      = (sample_rate + MAK_LOUD_SUBBLOCK_HOPS_PER_SEC / 2) /
                   MAK_LOUD_SUBBLOCK_HOPS_PER_SEC;
@@ -289,6 +291,14 @@ int mak_loud_worker_feed(struct mak_loud_worker *w,
                          int64_t abs_sample_pos)
 {
     if (!w || w->failed || !frame || frame->nb_samples <= 0) return 0;
+    /* The converter reads the frame as the format and channel count it was
+     * built for: anything else would be misread, past the end of its
+     * planes. */
+    if (frame->format != w->in_format ||
+        frame->ch_layout.nb_channels != w->channels) {
+        w->failed = true;
+        return -1;
+    }
 
     if (frame->nb_samples > w->buf_capacity) {
         int new_cap = frame->nb_samples + 1024;

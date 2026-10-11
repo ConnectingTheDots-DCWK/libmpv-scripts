@@ -10,6 +10,7 @@
 - A new audio filter whose first input is the end of the stream, as during the refresh seek of `patch_chain_eof.py`, passes it on and waits for data instead of building on a dummy float format. A filter that takes no float, such as `hdcd`, was disabled for good (`patch_lavfi_eof_passthrough.py`).
 - PipeWire and PulseAudio stay loaded until the process exits: the stubs unloaded them from an exit handler, under the audio thread of an app that exits without destroying the player.
 - The loudness scan of a Matroska file no longer reads -70 LUFS with no gated block: it placed each frame at its timestamp, rounded to 1 ms, so no 100 ms block was complete. It now counts samples from the first frame, as the waveform does, and the waveform of an MP3 no longer ends one encoder delay short.
+- The loudness scan of an MP2 file no longer crashes the process or reads garbage peaks: it converted the decoded samples as the probe's sample format, float, while the decoder outputs 16 bit.
 
 ### Changed
 - The waveform and loudness scan of an HTTP file that plays from its start decode it from mpv's demuxer cache instead of opening it again, so the file is downloaded once (mpv_audio_kit [#22](https://github.com/ales-drnz/mpv_audio_kit/issues/22)). When one pass from the start to the end is not possible (playback starting further in, a seek the cache cannot serve, an audio track switch, a cut download, the cache off or on disk, a file larger than the cache or a read-ahead that stops short), the analysis opens the file again as before. Both ways give the same bins.
