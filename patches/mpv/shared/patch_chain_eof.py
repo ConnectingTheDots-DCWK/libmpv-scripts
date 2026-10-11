@@ -13,10 +13,14 @@ never reports the end, and playback stops at the end of the file for
 good, with no loop wrap and no next playlist entry.
 
 reinit_audio_filters already issues a refresh seek when the rebuild drops
-0.2 s or more of buffered audio. This patch tracks, per user filter, an EOF
-that went in and has not come out, flags the chain when such a filter is
-freed, and makes reinit_audio_filters refresh-seek in that case too, so the
-decoder produces the tail and its EOF again.
+0.2 s or more of buffered audio while playing. This patch tracks, per user
+filter, an EOF that went in and has not come out, flags the chain when such
+a filter is freed, and makes reinit_audio_filters refresh-seek in that case
+too, in any state but the end of playback, so the decoder produces the tail
+and its EOF again. That includes the time between a seek and the restart of
+playback: a filter with a long look-ahead (dynaudnorm) takes a short file
+whole, EOF included, before it outputs, and a filter change then left the
+audio stalled after the little it had already passed on.
 
 Usage: patch_chain_eof.py <mpv source dir>
 """
@@ -106,11 +110,14 @@ patch(audio, [(
     "    if (mpctx->audio_status == STATUS_PLAYING && delay - ndelay >= 0.2)\n"
     "        issue_refresh_seek(mpctx, MPSEEK_EXACT);\n",
     f"    // {MARKER}: or if it dropped the EOF, which the decoder will not\n"
-    "    // send again: without the refresh the file would never end.\n"
+    "    // send again: without the refresh the file would never end. That\n"
+    "    // holds before playback restarts too: right after a seek a filter\n"
+    "    // with a long look-ahead (dynaudnorm) can hold the rest of a short\n"
+    "    // file and its EOF, and the refresh then repeats the seek.\n"
     "    bool dropped_eof = ao_c->filter->dropped_eof;\n"
     "    ao_c->filter->dropped_eof = false;\n"
-    "    if (mpctx->audio_status == STATUS_PLAYING &&\n"
-    "        (delay - ndelay >= 0.2 || dropped_eof))\n"
+    "    if ((mpctx->audio_status == STATUS_PLAYING && delay - ndelay >= 0.2) ||\n"
+    "        (dropped_eof && mpctx->audio_status != STATUS_EOF))\n"
     "        issue_refresh_seek(mpctx, MPSEEK_EXACT);\n",
 )])
 

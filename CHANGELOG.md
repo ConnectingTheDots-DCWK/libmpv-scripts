@@ -7,6 +7,7 @@
 
 ### Fixed
 - Removing or rebuilding a filter that holds the end of the file, such as `rubberband` in the last few hundred milliseconds, no longer stops playback there for good: mpv re-seeks to decode the end again (`patch_chain_eof.py`).
+- The same holds right after a seek: a filter with a long look-ahead, such as `dynaudnorm`, can take a short file whole with its end before playback restarts, and replacing it then stalled playback for good after a fraction of a second (`patch_chain_eof.py`).
 - A new audio filter whose first input is the end of the stream, as during the refresh seek of `patch_chain_eof.py`, passes it on and waits for data instead of building on a dummy float format. A filter that takes no float, such as `hdcd`, was disabled for good (`patch_lavfi_eof_passthrough.py`).
 - PipeWire and PulseAudio stay loaded until the process exits: the stubs unloaded them from an exit handler, under the audio thread of an app that exits without destroying the player.
 - The loudness scan of a Matroska file no longer reads -70 LUFS with no gated block: it placed each frame at its timestamp, rounded to 1 ms, so no 100 ms block was complete. It now counts samples from the first frame, as the waveform does, and the waveform of an MP3 no longer ends one encoder delay short.
