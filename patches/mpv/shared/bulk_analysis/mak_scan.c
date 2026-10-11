@@ -11,6 +11,7 @@
  * (optional — this file compiles and links standalone without it).
  *
  * See patch_bulk_analysis.py for benchmark numbers and the design rationale. */
+#include <math.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -226,7 +227,7 @@ static bool measure_pts_offset(AVFormatContext *fmt, AVCodecContext *dec,
             av_frame_unref(frame);
             if (!ok)
                 return false;
-            int64_t seq = emitted == 0 && pos > 0 ? pos : emitted;
+            int64_t seq = frames ? emitted : (pos > 0 ? pos : 0);
             int64_t d = pos - seq;
             emitted = seq + n;
             if (++frames >= 3 && d == prev) {
@@ -336,6 +337,10 @@ reseek:
     int64_t emitted_samples = 0;
     int     stream_pos_initialized = 0;
 
+    /* Worker 0 places the first frame at its timestamp, every later one
+     * right after the samples before it. */
+    bool    anchored   = false;
+
     while (1) {
         if (mak_waveform_current_gen() != a->my_gen ||
             atomic_load_explicit(a->abort, memory_order_relaxed))
@@ -376,9 +381,8 @@ reseek:
              * timestamp, every later one right after the samples before it
              * (the timestamps can run ahead of the samples, by an MP3's
              * encoder delay, or be rounded, to 1 ms in Matroska). */
-            int64_t frame_seq_pos =
-                emitted_samples == 0 && frame_sample_pos > 0
-                    ? frame_sample_pos : emitted_samples;
+            int64_t frame_seq_pos = anchored ? emitted_samples
+                : (frame_sample_pos > 0 ? frame_sample_pos : 0);
             if (from_pts && iframe->pts != AV_NOPTS_VALUE)
                 frame_seq_pos = frame_sample_pos - pts_offset;
 
@@ -418,6 +422,7 @@ reseek:
 
             /* Count on from where the frame was placed. */
             emitted_samples = frame_seq_pos;
+            anchored = true;
 
             mak_downmix_mono(out_buf, converted, channels, mono_buf);
             process_samples(mono_buf, converted,
@@ -635,17 +640,19 @@ static MP_THREAD_VOID coordinator_main(void *p)
     int sample_rate = st->codecpar->sample_rate;
     if (sample_rate <= 0) goto fail;
 
-    /* Track duration in microseconds. Prefer the format-level duration;
-     * fall back to the audio stream's own duration, then to the caller's
-     * (mpv's) duration hint. */
+    /* Track duration in microseconds. Prefer the caller's (mpv's), the one
+     * the cache-fed engine builds its axis from (mak_feed.c), so both paths
+     * lay the same bins; mpv takes a stream's duration over the format's,
+     * which can differ. Fall back to the format-level duration, then to the
+     * audio stream's own. */
     int64_t duration_us = 0;
-    if (probe_fmt->duration > 0) duration_us = probe_fmt->duration;
+    if (dur_secs > 0) duration_us = llround(dur_secs * 1e6);
+    if (duration_us <= 0 && probe_fmt->duration > 0)
+        duration_us = probe_fmt->duration;
     if (duration_us <= 0 && st->duration > 0) {
         duration_us = av_rescale_q(st->duration,
                                    st->time_base, AV_TIME_BASE_Q);
     }
-    if (duration_us <= 0 && dur_secs > 0)
-        duration_us = (int64_t)(dur_secs * 1e6);
 
     /* ── Classify the source (fully automatic, no caller hint) ──────────
      * Bulk parallel decode needs a complete, randomly seekable file. An
