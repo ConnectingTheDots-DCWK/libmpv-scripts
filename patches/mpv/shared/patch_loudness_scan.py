@@ -147,16 +147,20 @@ def patch_mak_scan_c(path):
          '        ? mak_loud_worker_decode_end(a->loud) : a->sample_end;'),
 
         ('worker early-stop #1 uses decode_end',
-         '            if (frame_sample_pos >= a->sample_end) {',
-         '            if (frame_sample_pos >= decode_end) {'),
+         '            if (frame_seq_pos >= a->sample_end) {',
+         '            if (frame_seq_pos >= decode_end) {'),
 
         ('worker feed before early stop',
          '            /* Stop early once the frame starts past our region. */',
          '            /* ' + MARKER + ' ─── feed the un-downmixed frame; the\n'
          '             * accumulator self-filters to its owned grid and treats\n'
-         '             * pre-roll as filter warm-up. */\n'
+         '             * pre-roll as filter warm-up. It sits where the envelope\n'
+         '             * counts it: frame timestamps are rounded by the\n'
+         '             * container (1 ms in Matroska), and placing each frame at\n'
+         '             * its own left the 100 ms sub-blocks short, so none was\n'
+         '             * complete. */\n'
          '            if (a->loud)\n'
-         '                mak_loud_worker_feed(a->loud, iframe, frame_sample_pos);\n'
+         '                mak_loud_worker_feed(a->loud, iframe, frame_seq_pos);\n'
          '\n'
          '            /* Stop early once the frame starts past our region. */'),
 

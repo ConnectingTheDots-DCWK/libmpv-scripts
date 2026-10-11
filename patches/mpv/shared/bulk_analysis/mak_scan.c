@@ -291,8 +291,16 @@ static MP_THREAD_VOID worker_chunk_thread(void *p)
             }
             stream_pos_initialized = 1;
 
+            /* Where the frame lands in the envelope: the first one at its
+             * timestamp, every later one right after the samples before it
+             * (the timestamps can run ahead of the samples, by an MP3's
+             * encoder delay, or be rounded, to 1 ms in Matroska). */
+            int64_t frame_seq_pos =
+                emitted_samples == 0 && frame_sample_pos > 0
+                    ? frame_sample_pos : emitted_samples;
+
             /* Stop early once the frame starts past our region. */
-            if (frame_sample_pos >= a->sample_end) {
+            if (frame_seq_pos >= a->sample_end) {
                 av_frame_unref(iframe);
                 goto done_decode;
             }
