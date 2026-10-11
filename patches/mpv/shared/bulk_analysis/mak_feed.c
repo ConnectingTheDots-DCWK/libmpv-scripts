@@ -48,16 +48,20 @@
 #define MAK_FEED_JUMP_SECS 1.0
 
 /* How close to the duration the decode must end for the pass to count as the
- * whole file: an end of file that comes earlier is a cut download. */
-#define MAK_FEED_END_SLACK_SECS 1.0
+ * whole file: an end of file that comes earlier is a cut download. It only
+ * has to absorb what a container's duration and its decoded samples
+ * disagree by (encoder delay and padding, tens of milliseconds). */
+#define MAK_FEED_END_SLACK_SECS 0.25
 
 struct feed_args {
     int gen;
     struct mak_demux_feed *feed;
     AVCodecParameters *par;
     AVRational tb;
+    int rate;                 /* source sample rate */
     double duration_secs;
-    double end_secs;          /* where the stream ends, in its timestamps */
+    int64_t total_samples;    /* the axis, as the bulk coordinator builds it */
+    int64_t end_samples;      /* where the stream ends, in sample positions */
     char *url;                /* for the re-open */
     AVDictionary *net_opts;   /* mpv's network options, for the re-open */
 };
@@ -80,7 +84,8 @@ struct feed_dec {
     bool loud_broken;  /* the layout changed: no measurement for this pass */
 #endif
     bool from_bof;     /* the pass started at the file's start */
-    double next_pts;   /* for frames without a timestamp */
+    bool pos_init;     /* a frame was placed */
+    int64_t emitted;   /* sequential source sample of the next frame */
     double pkt_end;    /* where the last packet ended (NOPTS: unknown) */
 };
 
@@ -111,11 +116,10 @@ static bool ensure_swr(struct feed_dec *d, const AVFrame *f)
 /* The accumulator of a run that starts at the file's start, created on its
  * first frame: the decoded format is only certain then. */
 static void loud_begin(struct feed_dec *d, const AVFrame *f,
-                       const AVCodecParameters *par, double duration_secs)
+                       const AVCodecParameters *par, int64_t total)
 {
     if (d->loud || !d->loud_on || d->loud_broken)
         return;
-    int64_t total = (int64_t)ceil(duration_secs * f->sample_rate);
     if (total <= 0 ||
         av_channel_layout_copy(&d->loud_layout, &f->ch_layout) < 0)
         return;
@@ -143,17 +147,22 @@ static void loud_drop(struct feed_dec *d)
 /* Folds one decoded frame. Returns false on a conversion failure. */
 static bool fold_frame(struct feed_dec *d, struct feed_args *a, AVFrame *f)
 {
-    int rate = f->sample_rate > 0 ? f->sample_rate : a->par->sample_rate;
     int channels = f->ch_layout.nb_channels;
-    if (rate <= 0 || channels <= 0 || f->nb_samples <= 0)
+    if (channels <= 0 || f->nb_samples <= 0)
         return true;
 
-    double pts = mp_pts_from_av(f->pts, &a->tb);
-    if (pts == MP_NOPTS_VALUE)
-        pts = d->next_pts;
-    if (pts == MP_NOPTS_VALUE)
-        return true;
-    d->next_pts = pts + (double)f->nb_samples / rate;
+    /* Placed the way the bulk worker places it: the first frame at its
+     * timestamp, every later one right after the samples before it. Frame
+     * timestamps are rounded by the container (to 1 ms in Matroska), so
+     * placing each at its own would shift it by a few samples. */
+    int64_t frame_pos;
+    if (f->pts != AV_NOPTS_VALUE && a->tb.num > 0 && a->tb.den > 0)
+        frame_pos = av_rescale(f->pts, (int64_t)a->rate * a->tb.num,
+                               a->tb.den);
+    else
+        frame_pos = d->pos_init ? d->emitted : 0;
+    d->pos_init = true;
+    int64_t pos = d->emitted == 0 && frame_pos > 0 ? frame_pos : d->emitted;
 
 #if MAK_FEED_LOUDNESS
     {
@@ -163,9 +172,9 @@ static bool fold_frame(struct feed_dec *d, struct feed_args *a, AVFrame *f)
             loud_drop(d);
             d->loud_broken = true;
         }
-        loud_begin(d, f, a->par, a->duration_secs);
+        loud_begin(d, f, a->par, a->total_samples);
         if (d->loud)
-            mak_loud_worker_feed(d->loud, f, llround(pts * rate));
+            mak_loud_worker_feed(d->loud, f, pos);
     }
 #endif
 
@@ -190,8 +199,10 @@ static bool fold_frame(struct feed_dec *d, struct feed_args *a, AVFrame *f)
                         f->nb_samples);
     if (n <= 0)
         return n == 0;
+    d->emitted = pos;
     mak_downmix_mono(d->buf, n, channels, d->mono);
-    mak_waveform_fold_samples(d->mono, n, pts, rate, a->gen);
+    mak_waveform_fold_fed(d->mono, n, d->emitted, a->gen);
+    d->emitted += n;
     return true;
 }
 
@@ -221,8 +232,7 @@ static bool decode(struct feed_dec *d, struct feed_args *a,
 static MP_THREAD_VOID feed_main(void *p)
 {
     struct feed_args *a = p;
-    struct feed_dec d = { .next_pts = MP_NOPTS_VALUE,
-                          .pkt_end = MP_NOPTS_VALUE };
+    struct feed_dec d = { .pkt_end = MP_NOPTS_VALUE };
 #if MAK_FEED_LOUDNESS
     d.loud_on = mak_loudness_is_enabled();
 #endif
@@ -236,7 +246,10 @@ static MP_THREAD_VOID feed_main(void *p)
     if (!d.dec || !d.pkt || !d.frame ||
         avcodec_parameters_to_context(d.dec, a->par) < 0)
         goto fail;
-    d.dec->pkt_timebase = a->tb;
+    /* No pkt_timebase, as in the bulk worker: with it libavcodec moves the
+     * first frame's timestamp past the samples it skips (an MP3's encoder
+     * delay), and the envelope would start that much later than the
+     * re-open's. */
     d.dec->thread_count = 1;
     if (avcodec_open2(d.dec, codec, NULL) < 0)
         goto fail;
@@ -262,8 +275,9 @@ static MP_THREAD_VOID feed_main(void *p)
                 goto fail;
             /* Complete only if the decode reached the end of the stream: a
              * download cut short also ends with an end of file. */
-            complete = d.from_bof && d.next_pts != MP_NOPTS_VALUE &&
-                d.next_pts >= a->end_secs - MAK_FEED_END_SLACK_SECS;
+            complete = d.from_bof && d.pos_init &&
+                d.emitted >= a->end_samples -
+                    (int64_t)(MAK_FEED_END_SLACK_SECS * a->rate);
             reopen = !complete;
             break;
         }
@@ -288,7 +302,7 @@ static MP_THREAD_VOID feed_main(void *p)
     if (complete && mak_waveform_fed_complete(a->gen)) {
 #if MAK_FEED_LOUDNESS
         struct mak_loud_slice slice;
-        int rate = d.swr_rate > 0 ? d.swr_rate : a->par->sample_rate;
+        int rate = a->rate;
         if (d.loud && mak_loud_worker_finish(d.loud, &slice)) {
             d.loud = NULL;
             mak_loudness_publish(&slice, 1, rate, a->gen);
@@ -362,11 +376,14 @@ bool mak_feed_start(int gen, struct demuxer *demuxer, struct sh_stream *audio,
     if (global)
         mp_setup_av_network_options(&a->net_opts, NULL, global, log);
     a->tb = mp_get_codec_timebase(audio->codec);
+    a->rate = par->sample_rate;
     a->duration_secs = duration_secs;
+    a->total_samples = llround(duration_secs * 1e6) * a->rate / 1000000;
     /* The packets carry the file's own timestamps, which start at its start
      * time: a file starting at 10 s ends at 10 s plus the duration. */
-    a->end_secs = duration_secs +
-        (isfinite(demuxer->start_time) ? demuxer->start_time : 0);
+    double start = isfinite(demuxer->start_time) ? demuxer->start_time : 0;
+    a->end_samples = a->total_samples +
+        (start > 0 ? llround(start * a->rate) : 0);
     a->feed = mak_demux_feed_attach(demuxer, audio);
     if (!a->feed || !mak_waveform_arm_fed(gen, duration_secs, par->sample_rate)) {
         if (a->feed)

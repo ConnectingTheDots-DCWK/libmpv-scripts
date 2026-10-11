@@ -80,6 +80,9 @@ struct mak_wave {
     /* PROGRESSIVE grown by the cache-fed engine (mak_feed.c) instead of the
      * af-tap: the af-tap fold stays off, and a gapless pass turns it READY. */
     bool     fed;
+    /* The cache-fed axis in source samples, derived as the bulk coordinator
+     * derives its total_samples, so both paths bin a sample alike. */
+    int64_t  fed_total;
     uint8_t *bins_filled;
     double   duration_secs;
     /* ROLLING (true live, unknown duration): a cache-aligned sliding window.
@@ -138,6 +141,7 @@ static void reset_g_wave_locked(void)
     g_wave.duration_us   = 0;
     g_wave.progressive   = false;
     g_wave.fed           = false;
+    g_wave.fed_total     = 0;
     g_wave.duration_secs = 0;
     g_wave.rolling        = false;
     g_wave.roll_base_bin  = 0;
@@ -243,9 +247,11 @@ void mak_waveform_arm_progressive(int my_gen, double duration_secs)
 bool mak_waveform_arm_fed(int my_gen, double duration_secs, int rate)
 {
     /* The whole file is decoded, so the bulk resolution applies: one bin per
-     * sample at most for a very short track. */
-    int64_t total = duration_secs > 0 && rate > 0
-                  ? (int64_t)(duration_secs * rate) : 0;
+     * sample at most for a very short track. The axis is the one the bulk
+     * coordinator builds from the same duration (whole microseconds times
+     * the rate, truncated), so the two paths produce the same bins. */
+    int64_t duration_us = duration_secs > 0 ? llround(duration_secs * 1e6) : 0;
+    int64_t total = rate > 0 ? duration_us * rate / 1000000 : 0;
     int fbins = total > MAK_WAVEFORM_BINS ? MAK_WAVEFORM_BINS : (int)total;
     if (fbins < 1)
         return false;
@@ -266,9 +272,10 @@ bool mak_waveform_arm_fed(int my_gen, double duration_secs, int rate)
         g_wave.bins_n        = fn;
         g_wave.bins_filled   = ffil;
         g_wave.duration_secs = duration_secs;
-        g_wave.duration_us   = (int64_t)(duration_secs * 1e6);
+        g_wave.duration_us   = duration_us;
         g_wave.progressive   = true;
         g_wave.fed           = true;
+        g_wave.fed_total     = total;
         g_wave.state         = MAK_WAVE_PROGRESSIVE;
         armed = true;
     }
@@ -289,12 +296,20 @@ bool mak_waveform_fed_complete(int gen)
     mp_mutex_lock(&g_wave_lock);
     if (atomic_load(&g_wave.current_gen) == gen && g_wave.fed &&
         g_wave.state == MAK_WAVE_PROGRESSIVE) {
-        /* The full axis stays: valid_bins 0 makes the reader emit every bin,
-         * and a tail the duration overshot reads filled == 0. */
-        g_wave.progressive = false;
-        g_wave.fed         = false;
-        g_wave.valid_bins  = 0;
-        g_wave.state       = MAK_WAVE_READY;
+        /* Trimmed like the bulk commit: the reader emits the bins up to the
+         * last one filled, dropping the tail a duration overshoot leaves. */
+        int valid = 0;
+        for (int b = g_wave.bins - 1; b >= 0 && g_wave.bins_filled; b--) {
+            if (g_wave.bins_filled[b]) {
+                valid = b + 1;
+                break;
+            }
+        }
+        g_wave.progressive   = false;
+        g_wave.fed           = false;
+        g_wave.valid_bins    = valid;
+        g_wave.coverage_bins = valid;
+        g_wave.state         = MAK_WAVE_READY;
         done = true;
     }
     mp_mutex_unlock(&g_wave_lock);
@@ -723,6 +738,46 @@ void mak_waveform_fold_samples(const float *mono, int n, double pts_secs,
                     g_wave.valid_bins = (int)b + 1;
                 i = j;
             }
+        }
+    }
+    mp_mutex_unlock(&g_wave_lock);
+}
+
+/* Fold [n] mono samples of the cache-fed pass, the first at sequential
+ * source sample [first_sample]. Binned sample by sample as the bulk worker's
+ * process_samples() does (same mapping, same accumulation order, samples
+ * past the axis dropped), so a fed envelope equals the re-open's. */
+void mak_waveform_fold_fed(const float *mono, int n, int64_t first_sample,
+                           int gen)
+{
+    if (!mono || n <= 0) return;
+    mp_mutex_lock(&g_wave_lock);
+    if (atomic_load(&g_wave.current_gen) == gen && g_wave.fed &&
+        g_wave.state == MAK_WAVE_PROGRESSIVE && g_wave.bins > 0 &&
+        g_wave.fed_total > 0 && g_wave.bins_min && g_wave.bins_max &&
+        g_wave.bins_sq && g_wave.bins_n && g_wave.bins_filled) {
+        const int     bins  = g_wave.bins;
+        const int64_t total = g_wave.fed_total;
+        for (int i = 0; i < n; i++) {
+            int64_t e = first_sample + i;
+            if (e < 0)
+                continue;
+            int64_t b = e * bins / total;
+            if (b >= bins)
+                break;
+            float s = mono[i];
+            if (!g_wave.bins_filled[b]) {
+                g_wave.bins_min[b] = s;
+                g_wave.bins_max[b] = s;
+                g_wave.bins_filled[b] = 1;
+            } else {
+                if (s < g_wave.bins_min[b]) g_wave.bins_min[b] = s;
+                if (s > g_wave.bins_max[b]) g_wave.bins_max[b] = s;
+            }
+            g_wave.bins_sq[b] += (double)s * s;
+            g_wave.bins_n[b]++;
+            if ((int)b + 1 > g_wave.valid_bins)
+                g_wave.valid_bins = (int)b + 1;
         }
     }
     mp_mutex_unlock(&g_wave_lock);
