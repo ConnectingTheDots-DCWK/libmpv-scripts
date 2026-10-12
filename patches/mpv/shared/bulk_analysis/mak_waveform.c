@@ -250,8 +250,11 @@ bool mak_waveform_arm_fed(int my_gen, double duration_secs, int rate)
      * sample at most for a very short track. The axis is the one the bulk
      * coordinator builds from the same duration (whole microseconds times
      * the rate, truncated), so the two paths produce the same bins. */
-    int64_t duration_us = duration_secs > 0 ? llround(duration_secs * 1e6) : 0;
-    int64_t total = rate > 0 ? duration_us * rate / 1000000 : 0;
+    if (!(duration_secs > 0 && duration_secs <= MAK_WAVEFORM_FED_MAX_SECS) ||
+        rate <= 0 || rate > MAK_WAVEFORM_FED_MAX_RATE)
+        return false;
+    int64_t duration_us = llround(duration_secs * 1e6);
+    int64_t total = duration_us * rate / 1000000;
     int fbins = total > MAK_WAVEFORM_BINS ? MAK_WAVEFORM_BINS : (int)total;
     if (fbins < 1)
         return false;
@@ -762,6 +765,9 @@ void mak_waveform_fold_fed(const float *mono, int n, int64_t first_sample,
             int64_t e = first_sample + i;
             if (e < 0)
                 continue;
+            /* Past the axis: e * bins stays inside int64 below it. */
+            if (e >= total)
+                break;
             int64_t b = e * bins / total;
             if (b >= bins)
                 break;

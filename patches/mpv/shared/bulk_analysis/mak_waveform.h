@@ -25,6 +25,12 @@
 struct mpv_node;
 
 #define MAK_WAVEFORM_BINS    2000
+/* The longest file and the highest rate the cache-fed pass takes (about
+ * 58 days, 1 MHz): its microseconds times the rate, and its samples times
+ * the bins, stay inside int64. Beyond, or with a duration that is not a
+ * number, the re-open does the scan. */
+#define MAK_WAVEFORM_FED_MAX_SECS 5e6
+#define MAK_WAVEFORM_FED_MAX_RATE 1000000
 #define MAK_WAVEFORM_WORKERS 4
 
 /* ── Public player-facing surface ─────────────────────────────────────────── */

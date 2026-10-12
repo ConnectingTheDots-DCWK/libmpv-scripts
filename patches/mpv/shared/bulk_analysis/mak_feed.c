@@ -98,6 +98,7 @@ struct feed_dec {
     struct demux_packet *batch[MAK_FEED_REPLAY_BATCH];
     int batch_n, batch_i;
     bool replayed;     /* the replay is over: pop the feed */
+    bool rate_changed; /* decoded at another rate than the axis counts */
 };
 
 /* (Re)builds the converter when the decoded format changes. */
@@ -161,6 +162,13 @@ static bool fold_frame(struct feed_dec *d, struct feed_args *a, AVFrame *f)
     int channels = f->ch_layout.nb_channels;
     if (channels <= 0 || f->nb_samples <= 0)
         return true;
+    /* The axis counts samples at the demuxer's rate: frames decoded at
+     * another one (implicit SBR in Matroska) would stretch the envelope.
+     * The re-open takes the generation over. */
+    if (f->sample_rate != a->rate) {
+        d->rate_changed = true;
+        return true;
+    }
 
     /* Placed the way the bulk worker places it: the first frame at its
      * timestamp, every later one right after the samples before it. Frame
@@ -173,6 +181,10 @@ static bool fold_frame(struct feed_dec *d, struct feed_args *a, AVFrame *f)
     else
         frame_pos = d->pos_init ? d->emitted : 0;
     d->pos_init = true;
+    /* A first timestamp past the end (a broken or crafted file) is placed
+     * at the end: nothing folds, and the pass is not complete. */
+    if (frame_pos > a->total_samples)
+        frame_pos = a->total_samples;
     int64_t pos = d->anchored ? d->emitted
         : (frame_pos > 0 ? frame_pos : 0);
 
@@ -306,7 +318,7 @@ static MP_THREAD_VOID feed_main(void *p)
                 goto fail;
             /* Complete only if the decode reached the end of the stream: a
              * download cut short also ends with an end of file. */
-            complete = d.from_bof && d.anchored &&
+            complete = d.from_bof && d.anchored && !d.rate_changed &&
                 d.emitted - d.first_pos >= a->total_samples -
                     (int64_t)(MAK_FEED_END_SLACK_SECS * a->rate);
             reopen = !complete;
@@ -328,6 +340,10 @@ static MP_THREAD_VOID feed_main(void *p)
         free_demux_packet(dp);
         if (!ok)
             goto fail;
+        if (d.rate_changed) {
+            reopen = true;
+            break;
+        }
     }
 
     if (complete && mak_waveform_fed_complete(a->gen)) {
@@ -384,10 +400,13 @@ bool mak_feed_start(int gen, struct demuxer *demuxer, struct sh_stream *audio,
                     double duration_secs, const char *url,
                     struct mpv_global *global, struct mp_log *log)
 {
-    if (!demuxer || !audio || !audio->codec || duration_secs <= 0 || !url)
+    if (!demuxer || !audio || !audio->codec || !url ||
+        !(duration_secs > 0 && duration_secs <= MAK_WAVEFORM_FED_MAX_SECS))
         return false;
     AVCodecParameters *par = mp_codec_params_to_av(audio->codec);
-    if (!par || par->sample_rate <= 0 || !avcodec_find_decoder(par->codec_id)) {
+    if (!par || par->sample_rate <= 0 ||
+        par->sample_rate > MAK_WAVEFORM_FED_MAX_RATE ||
+        !avcodec_find_decoder(par->codec_id)) {
         avcodec_parameters_free(&par);
         return false;
     }
