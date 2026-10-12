@@ -9,7 +9,7 @@
 # Compiles mpv 0.41.0 as a DYNAMIC library for iOS.
 #
 # === OUTPUT FORMATS AND LOCATIONS ===
-# Target Dir:  ios/Frameworks/
+# Final artifact: builds/release/libmpv_ios.xcframework.zip
 # Output File: libmpv.xcframework wrapping a dynamic libmpv.framework per slice.
 #              Each slice contains:
 #                libmpv.framework/libmpv          (Mach-O dylib, install_name
@@ -789,8 +789,8 @@ slice_mpv() {
     python3 "$LIBMPV_SCRIPTS_ROOT/patches/mpv/apple/patch_export_filter.py" \
       "$dir" "$SCRIPT_DIR/shared/mpv.exports" "$prefix"
   fi
-  # 9 patches shared across every platform (1 required + 8 optional) —
-  # see scripts/shared/_audio_only.sh.
+  # The mpv patches shared across every platform, see
+  # scripts/shared/_audio_only.sh.
   apply_mpv_patches_common "$dir"
 
   local bdir="$BUILD_DIR/build/mpv-${sdk}-${arch}"; mkdir -p "$bdir"

@@ -36,7 +36,7 @@ Gating
 ======
 
 The analyzer is OFF by default. It only runs when the read-write flag
-property `waveform-enabled` is set true. `mak_waveform_start()`
+property `waveform-enabled` is set true. `mak_scan_start()`
 self-gates on this flag, so `loadfile.c` can call it unconditionally
 on every file-load — it is a cheap no-op while disabled. Enabling the
 flag mid-track kicks the analyzer for the already-loaded file.
@@ -148,6 +148,7 @@ Files patched
     demux/demux.c          feed field, push, end of file, release, attach
     player/loadfile.c      kicks `mak_scan_start` after FILE_LOADED
     player/command.c       property registration + getter/setter
+    player/main.c          setup in mp_create, teardown in mp_destroy
     meson.build            new source files added to the build
 
 Layout

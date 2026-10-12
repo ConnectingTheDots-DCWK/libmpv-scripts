@@ -6,19 +6,18 @@
 # =============================================================================
 # build_libmpv_linux.sh
 #
-# Cross-compiles mpv as libmpv.so for Linux x86_64 / aarch64. Always cross —
-# even when the toolchain triple matches the host arch, we go through the
-# cross-prefix flow (e.g. x86_64-linux-gnu-gcc), so a single code path covers
-# every host/target combination.
+# Compiles mpv as libmpv.so for Linux x86_64 / aarch64, natively: the arch
+# must match the host's. The scripts still call the triple-prefixed tools
+# (e.g. x86_64-linux-gnu-gcc), which the image points at its gcc 10.
 #
 # === OUTPUT ===
 # builds/release/libmpv_linux-<arch>.so
 #
 # === SYSTEM ===
-# Run inside the mpv-build Docker image (docker/Dockerfile). The image
-# preinstalls both Linux cross-toolchains (x86_64-linux-gnu, aarch64-linux-gnu)
-# plus multiarch :amd64/:arm64 audio dev libs (alsa, pulse, pipewire). X11 /
-# VA-API / VDPAU are deliberately disabled — this is an audio-only build.
+# Run inside the mpv-build-linux image (`linux` stage of docker/Dockerfile):
+# Ubuntu 20.04, glibc 2.31, native arch only, alsa and pulse dev libs. PipeWire
+# headers are built here (build_audio_stubs). X11 / VA-API / VDPAU are
+# deliberately disabled — this is an audio-only build.
 #
 # Usage (from project root):
 #   ./scripts/build_libmpv_linux.sh --arch=x86_64
@@ -703,7 +702,7 @@ main() {
   # Settings ▸ Patches). By default libass is stripped from mpv, so the whole
   # chain (expat, libpng, freetype ×2, fribidi, harfbuzz, fontconfig, unibreak,
   # libass) is dead weight and skipped. mpv re-detects libass via pkg-config
-  # when these are present; see swscale_stripped()/patch_on in _audio_only.sh.
+  # when these are present; see libass_stripped() in _audio_only.sh.
   if ! libass_stripped; then
     build_expat
     build_libpng

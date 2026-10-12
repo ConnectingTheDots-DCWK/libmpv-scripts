@@ -3,7 +3,7 @@
 # Use of this source code is governed by BSD 3-Clause license that can be found in the LICENSE file.
 
 # Shared cross-compile setup for build_libmpv_linux.sh + build_libmpv_windows.sh.
-# Sourced by every desktop build script. Do not run directly.
+# Sourced by those two scripts. Do not run directly.
 #
 # Usage:
 #   CROSS_BUILD_DIR=/tmp/build-foo CROSS_PREFIX_DIR=/tmp/build-foo/prefix \
@@ -222,9 +222,9 @@ _cross_emit_cmake_file() {
   } > "$file"
 }
 
-# Map internal arch (x86_64|aarch64) to the platform-specific FOLDER NAME used
-# under <platform>/libs/. The user-visible directory layout uses each platform's
-# canonical naming:
+# Map internal arch (x86_64|aarch64) to the arch in the release asset name
+# (builds/release/libmpv_<platform>-<arch>.*), in each platform's canonical
+# naming:
 #   Linux   → 'aarch64' / 'x86_64'   (uname -m, CMAKE_SYSTEM_PROCESSOR)
 #   Windows → 'arm64'   / 'x86_64'   (MSVC, Visual Studio, MS docs)
 cross_folder_arch() {

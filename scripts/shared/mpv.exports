@@ -1,5 +1,5 @@
-# Mach-O exported-symbols list for libmpv.dylib (macOS).
-# Passed to ld64 via -Wl,-exported_symbols_list,...
+# Mach-O exported-symbols list for libmpv.dylib (macOS and iOS).
+# Passed to ld64 via -Wl,-exported_symbols_list,... (patch_export_filter.py).
 #
 # Only the public mpv_* C API leaks into the .dylib's dynamic symbol table.
 # All ffmpeg / freetype / fribidi / harfbuzz / fontconfig / libass / libplacebo /

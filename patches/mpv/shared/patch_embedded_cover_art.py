@@ -77,7 +77,7 @@ MARKER = 'MAK_EMBEDDED_COVER_ART_PATCH_V1'
 # `patch_audio_output_state.py` inserts there too, and we want the two
 # patches to compose in either order. `audio-device-list → audio-display`
 # is a few lines further down, untouched by any other patch in this
-# repo's `scripts/patches/mpv/`, and stable across recent mpv releases.
+# repo's `patches/mpv/`, and stable across recent mpv releases.
 TABLE_PRISTINE = (
     '    {"audio-device-list", mp_property_audio_devices},'
 )

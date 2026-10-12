@@ -335,7 +335,7 @@ build_abi() {
   # dependency, so the expat/libpng/freetype/fribidi/harfbuzz/freetype-r2/
   # fontconfig/libass chain is unreferenced and skipped (libpng + expat are
   # font-only here — ffmpeg uses zlib/lzma, libxml2 is built
-  # --without-{png,iconv,lzma,zlib}).
+  # --without-{iconv,lzma,zlib}).
   if ! libass_stripped; then
     android_expat      "$abi" "$prefix"
     android_libpng     "$abi" "$prefix"
@@ -809,7 +809,7 @@ android_mpv() {
   local dir; dir="$(extract "$src" "$BUILD_DIR/src")"
   local bdir="$BUILD_DIR/build/mpv-android-$abi"; mkdir -p "$bdir"
   pushd "$bdir" >/dev/null
-  # ── Apply mpv patches (9 shared: 1 required + 8 optional) ────────────────
+  # ── Apply the shared mpv patches (scripts/shared/_audio_only.sh) ─────────
   apply_mpv_patches_common "$dir"
 
   # ── JNI bridge (Android-only) ────────────────────────────────────────────

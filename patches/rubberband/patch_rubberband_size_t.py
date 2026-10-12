@@ -23,7 +23,7 @@ global namespace (vs <cstddef> which only guarantees std::size_t).
 Both files use unqualified `size_t` so we don't want to force a
 std::size_t rewrite.
 
-Invoked from scripts/build_librubberband.sh after extract, before
+Invoked from every build_libmpv_<platform>.sh after extract, before
 meson setup. Idempotent: re-running on an already-patched tree is a
 no-op via the marker check.
 

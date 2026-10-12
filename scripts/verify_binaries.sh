@@ -10,9 +10,10 @@
 # Verifies, for each libmpv (per platform / per arch):
 #   1.  File format / arch matches platform expectation
 #   2.  Exactly 54 mpv_* exports, zero leaks
-#   3.  Patched mpv properties present (all 12: prefetch-state +
+#   3.  Patched mpv properties present (all 14: prefetch-state +
 #       -cache-duration, audio-output-state, embedded-cover-art-data/mime,
-#       pcm-tap-frame, audio-tap-frames, analyzer-taps, waveform-data/-enabled)
+#       pcm-tap-frame, audio-tap-frames, analyzer-taps, waveform-data/-enabled,
+#       loudness-scan-data/-enabled)
 #   4.  FFmpeg patches present (libsmb2 protocol, mov advanced_editlist)
 #   5.  Required audio decoder whitelist sample present
 #   6.  Required audio filter whitelist sample present
@@ -24,11 +25,11 @@
 #       SMB2-when-enabled, embedded-CA-bundle-when-enabled). Catches a strip
 #       that silently didn't take effect.
 #   8.  External runtime dependency list (informative)
-#   9.  Embedded dep VERSIONS match scripts/_versions.sh — catches the
+#   9.  Embedded dep VERSIONS match scripts/shared/_versions.sh — catches the
 #       classic "I bumped harfbuzz in _versions.sh but the build cache held
 #       the old binary" drift
 #  10.  Mpv API surface hash (sorted mpv_* names → SHA-256/12) — must be
-#       IDENTICAL across all 8 binaries (otherwise the API surface drifted
+#       IDENTICAL across all 9 binaries (otherwise the API surface drifted
 #       between platforms)
 #  11.  NEEDED allowlist per platform (catches forbidden runtime
 #       dependencies — e.g. `libstdc++.so` on Android, removed in API 37)
@@ -59,7 +60,7 @@
 # A layer whose tool fails or returns nothing counts as FAILED, never as a
 # vacuous pass, and a run that finds no binary at all exits non-zero.
 #
-# All inspection runs inside the mpv-build-env Docker container so we have
+# All inspection runs inside the mpv-build-verify Docker image so we have
 # a single toolchain (binutils, llvm-readobj, llvm-objdump, qemu-user,
 # wine) regardless of which OS / arch the binary targets. macOS + iOS
 # binaries skip the load test (would need Xcode); the static layers (1-12)
@@ -1286,7 +1287,6 @@ check_binary() {
     fail "format/arch mismatch (wanted: $expected_format)"
   fi
 
-  # xcframework.zip: only validate format + skip rest
   # ── Resolve what to inspect ──
   # For an xcframework.zip the real binary is the Mach-O dylib(s) inside, so
   # extract it and run the static layers on the primary slice — don't just
@@ -1319,7 +1319,7 @@ check_binary() {
   esac
 
   # ── Pull symbols, deps, strings via the cross-toolchain (all on PATH inside
-  # the mpv-build-env container). ──
+  # the mpv-build-verify container). ──
   local exports deps str_text
   case "$kind" in
     dll)

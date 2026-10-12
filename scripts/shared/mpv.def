@@ -1,9 +1,9 @@
 ; Windows DEF file for libmpv.dll (PE/COFF) — auto-generated
 ; from libmpv-2.dll exports. Drop into mpv link via
-;   -Wl,--def-file,scripts/mpv.def
+;   build_libmpv_windows.sh (EXPORT_HYGIENE_LDFLAGS, as a link input)
 ;
-; Equivalent to scripts/mpv.ver (Linux ELF version-script) and
-; scripts/mpv.exports (macOS Mach-O exported-symbols list).  Each
+; Equivalent to scripts/shared/mpv.ver (Linux ELF version-script) and
+; scripts/shared/mpv.exports (Apple Mach-O exported-symbols list).  Each
 ; restricts the dynamic export table to the public mpv_* C API.
 ;
 ; Regenerate after a libmpv API bump with the script's auto-extract

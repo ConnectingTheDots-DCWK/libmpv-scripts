@@ -22,9 +22,9 @@
 #             dev libs; what `verify` builds on.
 #   windows : base + GNU MinGW-w64 (x86_64) + llvm-mingw (aarch64)
 #   android : base alias — the NDK is fetched at runtime by build_libmpv_android.sh
-#   verify  : base + the linux/windows cross-compilers + qemu-user + Wine/Hangover
-#             + arm32 binutils — the union needed by verify_binaries.sh (NO audio
-#             dev libs: those only matter when *building* mpv, not verifying it).
+#   verify  : linux-noble + the windows cross-compilers + qemu-user +
+#             Wine/Hangover + arm32 binutils + the foreign arch's runtime libs —
+#             the union needed by verify_binaries.sh.
 #
 # Per-image arch is chosen by the kit via `docker build/run --platform` (see
 # tui/orchestrate.go): linux/windows/verify build for the HOST arch (native
@@ -50,8 +50,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Ubuntu 24.04 ships /etc/apt/sources.list.d/ubuntu.sources (deb822). Replace
 # with arch-pinned classic sources.list so that ports.ubuntu.com serves arm64
 # and archive.ubuntu.com serves amd64 — keeping a single apt update happy on
-# either host arch. The foreign arch is enabled here (the linux stage installs
-# foreign-arch dev libs on top).
+# either host arch. The foreign arch is enabled here (verify installs the
+# foreign arch's runtime libs on top; linux-noble its dev libs only with
+# LINUX_FOREIGN_LIBS=1).
 RUN set -eux; \
     NATIVE_ARCH="$(dpkg --print-architecture)"; \
     if [ "$NATIVE_ARCH" = "arm64" ]; then FOREIGN_ARCH="amd64"; else FOREIGN_ARCH="arm64"; fi; \
@@ -104,7 +105,7 @@ RUN pip3 install --break-system-packages --no-cache-dir 'meson>=1.6.0'
 WORKDIR /src
 
 # ══════════════════════════════════════════════════════════════════════════════
-# linux — GCC cross-toolchains (both arches) + multiarch audio/X11 dev libs
+# linux-noble — GCC cross-toolchains (both arches) + native audio/X11 dev libs
 # ══════════════════════════════════════════════════════════════════════════════
 FROM base AS linux-noble
 

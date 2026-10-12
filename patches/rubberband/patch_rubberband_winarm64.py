@@ -22,7 +22,7 @@ This patch is applied unconditionally — the new builtin is at least as
 strong as the original xchgl barrier on x86/x86_64 too, so the
 non-Windows-ARM builds are unaffected.
 
-Invoked from scripts/build_librubberband.sh after extract, before
+Invoked from scripts/build_libmpv_windows.sh after extract, before
 meson setup. Idempotent: re-running on an already-patched tree is a
 no-op.
 

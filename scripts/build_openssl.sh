@@ -72,8 +72,8 @@ build_openssl() {
 
     # Static-only + minimal: no shared libs, no docs, no apps, no tests,
     # no engines (deprecated in 3.x), no deprecated APIs we don't use.
-    # Threads stay on (libsmb2 needs them). All algorithms stay on —
-    # FFmpeg's HTTPS path needs the full default set.
+    # Threads stay on (libsmb2 needs them). The legacy and rarely used
+    # algorithms are off (list below); what TLS 1.2/1.3 needs stays on.
     #
     # Caller's CFLAGS/LDFLAGS get passed via env (Configure honours them).
     # extra_config (4th arg, optional): extra Configure tokens — e.g.

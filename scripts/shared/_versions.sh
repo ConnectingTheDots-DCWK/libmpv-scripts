@@ -24,9 +24,9 @@ export LIBMPV_RELEASE="${LIBMPV_RELEASE:-r16}"
 export FFMPEG_VERSION="${FFMPEG_VERSION:-8.1.1}"
 
 # ── Subtitle / font / text shaping (libass + pulls) ──────────────────────────
-# libass is built but not used at runtime by an audio-only consumer; mpv's
-# meson still requires it as a dependency to link. The whole text stack is
-# dead-code-stripped from the final audio-only binary.
+# Built only when libass is kept (strip_libass and strip_mpv_dead both
+# disabled in Settings > Patches, see libass_stripped in _audio_only.sh).
+# By default patch_strip_libass.py removes libass and this chain is skipped.
 export LIBASS_VERSION="${LIBASS_VERSION:-0.17.4}"
 export FREETYPE_VERSION="${FREETYPE_VERSION:-2.14.3}"
 export FRIBIDI_VERSION="${FRIBIDI_VERSION:-1.0.16}"
