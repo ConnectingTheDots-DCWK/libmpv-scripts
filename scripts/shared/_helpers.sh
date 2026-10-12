@@ -5,90 +5,6 @@
 # Shared helpers for the build_libmpv_<platform>.sh scripts.
 # Sourced by every script. Do not run directly.
 
-# ── Repo root resolution ─────────────────────────────────────────────────────
-# Locates the `mpv_audio_kit` Flutter package this build infrastructure
-# targets. Build outputs (libraries, generated Dart sources, fixtures) all
-# land under the repo root resolved here.
-#
-# Self-locating + depth-agnostic: walks up the directory tree from this
-# file's location, at each ancestor checking for a sibling
-# `mpv_audio_kit/`. Works whether `_helpers.sh` lives at the top of
-# libmpv-scripts/ or several subfolders deep (e.g. scripts/shared/).
-#
-# Resolution order:
-#   1. $MPV_AUDIO_KIT_ROOT — explicit override (used by Docker runs
-#                            where /repo is bind-mounted).
-#   2. Walk up from <helpers_dir>; at each ancestor check for a sibling
-#      `mpv_audio_kit/` whose pubspec.yaml has `name: mpv_audio_kit`.
-#   3. Walk up from <helpers_dir>; at each ancestor check the directory
-#      itself (legacy nested layout, when this infrastructure used to
-#      live inside `mpv_audio_kit/scripts/`).
-#
-# Errors out with an actionable message when no candidate is valid.
-#
-# Optional first argument is accepted but ignored (back-compat shim).
-resolve_repo_root() {
-  local helpers_dir
-  helpers_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  local candidate
-
-  if [[ -n "${MPV_AUDIO_KIT_ROOT:-}" ]]; then
-    candidate="$MPV_AUDIO_KIT_ROOT"
-    _validate_repo_root "$candidate" "MPV_AUDIO_KIT_ROOT" || return 1
-    (cd "$candidate" && pwd)
-    return 0
-  fi
-
-  # Walk up looking for a sibling `mpv_audio_kit/` (production layout).
-  local search="$helpers_dir"
-  while [[ "$search" != "/" ]]; do
-    candidate="$search/../mpv_audio_kit"
-    if [[ -f "$candidate/pubspec.yaml" ]] && \
-       grep -q "^name: mpv_audio_kit" "$candidate/pubspec.yaml" 2>/dev/null; then
-      (cd "$candidate" && pwd)
-      return 0
-    fi
-    search="$(dirname "$search")"
-  done
-
-  # Walk up looking for an ancestor that IS the mpv_audio_kit checkout
-  # (legacy layout, scripts nested inside the package).
-  search="$helpers_dir"
-  while [[ "$search" != "/" ]]; do
-    if [[ -f "$search/pubspec.yaml" ]] && \
-       grep -q "^name: mpv_audio_kit" "$search/pubspec.yaml" 2>/dev/null; then
-      (cd "$search" && pwd)
-      return 0
-    fi
-    search="$(dirname "$search")"
-  done
-
-  echo "ERROR: cannot locate the mpv_audio_kit repo." >&2
-  echo "Tried walking up from $helpers_dir:" >&2
-  echo "  - looking for a sibling mpv_audio_kit/ at every ancestor" >&2
-  echo "  - looking for an mpv_audio_kit ancestor (legacy nested layout)" >&2
-  echo "" >&2
-  echo "Set MPV_AUDIO_KIT_ROOT=/absolute/path/to/mpv_audio_kit" >&2
-  return 1
-}
-
-_validate_repo_root() {
-  local path="$1" source="$2"
-  if [[ ! -d "$path" ]]; then
-    echo "ERROR: $source points at a non-existent path: $path" >&2
-    return 1
-  fi
-  if [[ ! -f "$path/pubspec.yaml" ]]; then
-    echo "ERROR: $source does not contain pubspec.yaml: $path" >&2
-    return 1
-  fi
-  if ! grep -q "^name: mpv_audio_kit" "$path/pubspec.yaml" 2>/dev/null; then
-    echo "ERROR: $source pubspec.yaml is not the mpv_audio_kit package: $path" >&2
-    return 1
-  fi
-  return 0
-}
-
 # ── libmpv-scripts repo root ─────────────────────────────────────────────────
 # Self-locating: this file lives at <repo>/scripts/shared/_helpers.sh, so the
 # repo root is two levels up. Used by every callsite that references the
@@ -118,8 +34,7 @@ fail() { die "$@"; }
 # Usage: download <url> <dest_path>
 # Smart default: an existing non-empty dest is always reused. Pass
 # FORCE_DOWNLOAD=1 to redownload (useful when a tarball is corrupted or the
-# upstream URL points at a moving tag). SKIP_DOWNLOAD=1 is still honored as
-# a no-op for backwards compatibility — the cache is the default now.
+# upstream URL points at a moving tag).
 download() {
   local url="$1" dest="$2"
   if [[ -s "$dest" && "${FORCE_DOWNLOAD:-0}" != "1" ]]; then

@@ -1030,14 +1030,3 @@ mpv_elf_size_ldflags() {
     *)       echo "mpv_elf_size_ldflags: unknown packing '$1'" >&2; return 1 ;;
   esac
 }
-
-# ── libxml2 ./configure trim — keep only the DASH/IMF DOM subset ─────────────
-# ffmpeg's dashdec/imfdec use only xmlReadMemory + DOM tree navigation
-# (xmlGetProp/xmlNodeGetContent) + xmlNewNode (so --with-output stays). XPath,
-# DTD validation, regexps, schemas, c14n, the reader/pattern/xpointer/xinclude
-# APIs are unused — dropping them saves ~57K. Shared so every platform's
-# build_libxml2/slice_libxml2 appends the same set. Env opt-out: LIBXML2_TRIM=0.
-libxml2_trim_args() {
-  [[ "${LIBXML2_TRIM:-1}" == "0" ]] && return
-  echo "--without-xpath --without-valid --without-regexps --without-c14n --without-xptr --without-xinclude --without-schemas --without-schematron --without-reader --without-pattern --without-sax1"
-}

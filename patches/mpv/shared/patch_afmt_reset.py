@@ -13,7 +13,6 @@ This patch adds an early return in parse_afmt so that empty string or "no" sets
 the internal value to 0 (AF_FORMAT_UNKNOWN), matching the initial default.
 """
 import sys
-import re
 
 fn = sys.argv[1]  # path to options/m_option.c
 with open(fn) as f:

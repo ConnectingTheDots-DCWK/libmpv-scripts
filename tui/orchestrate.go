@@ -86,9 +86,9 @@ func findScriptsRoot() (string, error) {
 	}
 }
 
-// resolveRepoRoot mirrors scripts/shared/_helpers.sh::resolve_repo_root in
-// pure Go (so it works on Windows too): MPV_AUDIO_KIT_ROOT, then a sibling
-// mpv_audio_kit/ checkout, then a legacy nested layout.
+// resolveRepoRoot finds the mpv_audio_kit checkout in pure Go (so it works on
+// Windows too): MPV_AUDIO_KIT_ROOT, then a sibling mpv_audio_kit/ checkout,
+// then a legacy nested layout.
 func resolveRepoRoot(scriptsRoot string) (string, error) {
 	if env := os.Getenv("MPV_AUDIO_KIT_ROOT"); env != "" {
 		if isMpvAudioKit(env) {
