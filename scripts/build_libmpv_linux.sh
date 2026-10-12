@@ -559,6 +559,9 @@ build_mpv() {
   log "Building mpv $MPV_VERSION..."
   local src="$BUILD_DIR/src/mpv-$MPV_VERSION.tar.gz"
   download "https://github.com/mpv-player/mpv/archive/refs/tags/v${MPV_VERSION}.tar.gz" "$src"
+  # A pristine tree on every build: src/ survives cleanup_build, and the mpv
+  # patches assume an unpatched tree (see build_libmpv_android.sh).
+  rm -rf "$BUILD_DIR/src/mpv-$MPV_VERSION"
   local dir; dir="$(extract "$src" "$BUILD_DIR/src")"
   local bdir="$BUILD_DIR/build/mpv"; mkdir -p "$bdir"
   apply_mpv_patches_common "$dir"

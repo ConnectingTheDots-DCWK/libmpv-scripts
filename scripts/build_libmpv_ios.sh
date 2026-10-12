@@ -767,11 +767,11 @@ slice_mpv() {
   # slices the second slice_mpv invocation would be no-op'd by the patch's
   # MARKER guard and link against the previous slice's prefix archives
   # (wrong arch). Cost: ~50 MB × N slices.
+  # Re-extracted on every build: src/ survives cleanup_build, and the mpv
+  # patches assume an unpatched tree.
   local dir="$BUILD_DIR/src/mpv-${sdk}_${arch}"
-  if [[ ! -d "$dir" ]]; then
-    mkdir -p "$dir"
-    tar -xzf "$src" --strip-components=1 -C "$dir"
-  fi
+  rm -rf "$dir"; mkdir -p "$dir"
+  tar -xzf "$src" --strip-components=1 -C "$dir"
 
   # ── Apply mpv patches ──────────────────────────────────────────────────────
   # iOS-only patches (must run before the shared ones — they touch

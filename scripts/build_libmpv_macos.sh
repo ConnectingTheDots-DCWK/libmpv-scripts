@@ -669,11 +669,11 @@ build_mpv() {
   # into meson.build; if we shared the source across arches the second
   # build_mpv invocation would be no-op'd by the patch's MARKER guard and
   # link against the previous arch's prefix archives (wrong arch).
+  # Re-extracted on every build: src/ survives cleanup_build, and the mpv
+  # patches assume an unpatched tree.
   local dir="$BUILD_DIR/src/mpv-$ARCH"
-  if [[ ! -d "$dir" ]]; then
-    mkdir -p "$dir"
-    tar -xzf "$src" --strip-components=1 -C "$dir"
-  fi
+  rm -rf "$dir"; mkdir -p "$dir"
+  tar -xzf "$src" --strip-components=1 -C "$dir"
 
   # macOS-only patches: required before the shared ones (touch meson.build).
   python3 "$LIBMPV_SCRIPTS_ROOT/patches/mpv/apple/patch_utils_mac.py" "$dir/meson.build"
