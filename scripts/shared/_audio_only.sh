@@ -693,6 +693,12 @@ apply_mpv_patches_common() {
   elif patch_on loudness_scan; then
     warn "Skipping loudness_scan: it requires bulk_analysis (disabled)"
   fi
+  # filter_label_tap also feeds the progressive waveform from the af chain
+  # (mak_waveform_tap_in). It builds without bulk_analysis, but
+  # bulk_analysis without it never grows a progressive or rolling envelope.
+  if patch_on bulk_analysis && ! patch_on filter_label_tap; then
+    warn "filter_label_tap disabled: the progressive and rolling waveform of bulk_analysis gets no frames"
+  fi
   _mpv_patch filter_label_tap   patch_filter_label_tap.py   "$mpv_dir"
   _mpv_patch chain_eof          patch_chain_eof.py          "$mpv_dir"
   _mpv_patch lavfi_eof_passthrough patch_lavfi_eof_passthrough.py "$mpv_dir"

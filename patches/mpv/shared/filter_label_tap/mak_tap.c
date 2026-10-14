@@ -41,9 +41,18 @@
 #include "audio/aframe.h"
 #include "audio/format.h"
 #include "audio/mak_tap.h"
+#include "osdep/threads.h"
+
+/* The pre-DSP waveform fold feeds the bulk_analysis patch. Without it
+ * (DISABLED_PATCHES=bulk_analysis) the tap builds alone and the fold is a
+ * no-op. */
+#if __has_include("audio/mak_waveform.h")
 #include "audio/mak_waveform.h"
 #include "audio/mak_wave_fold.h"
-#include "osdep/threads.h"
+#define MAK_TAP_WAVEFORM 1
+#else
+#define MAK_TAP_WAVEFORM 0
+#endif
 
 /* Format-adaptive ring sizing.
  *
@@ -389,6 +398,10 @@ static size_t convert_aframe(struct mp_aframe *aframe, int offset,
  * larger than the scratch is folded in chunks. */
 void mak_waveform_tap_in(const char *name, struct mp_aframe *aframe)
 {
+#if !MAK_TAP_WAVEFORM
+    (void)name;
+    (void)aframe;
+#else
     if (!name || !aframe) return;
     if (strcmp(name, "in") != 0) return;
     if (!mak_waveform_wants_frames()) return;
@@ -411,6 +424,7 @@ void mak_waveform_tap_in(const char *name, struct mp_aframe *aframe)
         offset += n;
     }
     mp_mutex_unlock(&g_tap_write_lock);
+#endif
 }
 
 /* Append `bytes` from `src` to the ring with wrap. Caller holds the
