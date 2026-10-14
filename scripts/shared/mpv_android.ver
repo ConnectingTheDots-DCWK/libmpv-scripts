@@ -1,9 +1,9 @@
 # ELF version script for libmpv.so on Android.
 # Passed to ld via -Wl,--version-script,...
 #
-# Same surface as scripts/shared/mpv.ver (only the public mpv_* C API exported)
-# PLUS JNI_OnLoad — the runtime hook Android calls when libmpv.so is
-# brought in via System.loadLibrary("mpv"). Compiled into the binary
+# Same surface as scripts/shared/mpv.ver (the public mpv_* C API and the
+# mak_pcm_* live PCM API) PLUS JNI_OnLoad — the runtime hook Android calls
+# when libmpv.so is brought in via System.loadLibrary("mpv"). Compiled into the binary
 # from patches/mpv/android/android_jni_bridge.c, it forwards the
 # JavaVM* to ffmpeg's `av_jni_set_java_vm()` so audiotrack and other
 # JNI-dependent components have a working VM by the time the player
@@ -11,6 +11,15 @@
 {
   global:
     mpv_*;
+    mak_pcm_create;
+    mak_pcm_write;
+    mak_pcm_finish;
+    mak_pcm_abort;
+    mak_pcm_buffered;
+    mak_pcm_consumed;
+    mak_pcm_state;
+    mak_pcm_release;
+    mak_pcm_release_all;
     JNI_OnLoad;
   local:
     *;

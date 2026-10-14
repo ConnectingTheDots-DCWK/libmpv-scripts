@@ -4,7 +4,8 @@
 ;
 ; Equivalent to scripts/shared/mpv.ver (Linux ELF version-script) and
 ; scripts/shared/mpv.exports (Apple Mach-O exported-symbols list).  Each
-; restricts the dynamic export table to the public mpv_* C API.
+; restricts the dynamic export table to the public mpv_* C API, plus the
+; mak_pcm_* live PCM API at the end (patch_pcm_stream.py).
 ;
 ; Regenerate after a libmpv API bump with the script's auto-extract
 ; (build once without --def-file, then dump exports).
@@ -64,3 +65,12 @@ mpv_unobserve_property
 mpv_wait_async_requests
 mpv_wait_event
 mpv_wakeup
+mak_pcm_create
+mak_pcm_write
+mak_pcm_finish
+mak_pcm_abort
+mak_pcm_buffered
+mak_pcm_consumed
+mak_pcm_state
+mak_pcm_release
+mak_pcm_release_all

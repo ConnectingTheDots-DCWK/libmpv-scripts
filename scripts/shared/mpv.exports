@@ -1,9 +1,19 @@
 # Mach-O exported-symbols list for libmpv.dylib (macOS and iOS).
 # Passed to ld64 via -Wl,-exported_symbols_list,... (patch_export_filter.py).
 #
-# Only the public mpv_* C API leaks into the .dylib's dynamic symbol table.
+# Only the public mpv_* C API, plus the mak_pcm_* live PCM API listed by name
+# (patch_pcm_stream.py), leaks into the .dylib's dynamic symbol table.
 # All ffmpeg / freetype / fribidi / harfbuzz / fontconfig / libass / libplacebo /
 # libsmb2 / libxml2 / rubberband / speexdsp internals stay private (they were
 # also linked statically; without this list they would be exported and
 # clash-prone with other Flutter plugins linking the same libs).
 _mpv_*
+_mak_pcm_create
+_mak_pcm_write
+_mak_pcm_finish
+_mak_pcm_abort
+_mak_pcm_buffered
+_mak_pcm_consumed
+_mak_pcm_state
+_mak_pcm_release
+_mak_pcm_release_all

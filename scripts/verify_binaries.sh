@@ -9,7 +9,7 @@
 # Static-analysis sanity check for every binary in builds/release/.
 # Verifies, for each libmpv (per platform / per arch):
 #   1.  File format / arch matches platform expectation
-#   2.  Exactly 54 mpv_* exports, zero leaks
+#   2.  Exactly 54 mpv_* and 9 mak_pcm_* exports, zero leaks
 #   3.  Patched mpv properties present (all 14: prefetch-state +
 #       -cache-duration, audio-output-state, embedded-cover-art-data/mime,
 #       pcm-tap-frame, audio-tap-frames, analyzer-taps, waveform-data/-enabled,
@@ -86,7 +86,7 @@
 #
 #  #  Category                  macOS  iOS  Linux  Win  Android   reason when N/A
 #  1  Format / arch               ✓    ✓     ✓     ✓     ✓
-#  2  Exports (54 mpv_*)          ✓    ✓     ✓     ✓     ✓
+#  2  Exports (54 mpv_*, 9 mak)  ✓    ✓     ✓     ✓     ✓
 #  3  mpv patched properties      ✓    ✓     ✓     ✓     ✓
 #  4  FFmpeg patches              ✓    ✓     ✓     ✓     ✓
 #  5  Audio decoders              ✓    ✓     ✓     ✓     ✓
@@ -137,6 +137,8 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
 
 # ── Truth tables ──────────────────────────────────────────────────────────────
 EXPECTED_MPV_EXPORTS=54
+# The live PCM input API (patch_pcm_stream.py), exported by name next to mpv_*.
+EXPECTED_MAK_PCM_EXPORTS=9
 
 EXPECTED_FORMATS=(
   "libmpv_macos.xcframework.zip|Zip archive data"
@@ -1378,16 +1380,22 @@ check_binary() {
     android) allowed_extra_re='^JNI_OnLoad$' ;;
   esac
 
-  local total_exports mpv_exports leaks
+  local total_exports mpv_exports mak_exports leaks
   total_exports=$(grep -cE '.' <<<"$exports" || true)
   mpv_exports=$(grep -cE '^_?mpv_' <<<"$exports" || true)
+  mak_exports=$(grep -cE '^_?mak_pcm_' <<<"$exports" || true)
   local allowed_extras
   allowed_extras=$(grep -cE "$allowed_extra_re" <<<"$exports" || true)
-  leaks=$((total_exports - mpv_exports - allowed_extras))
+  leaks=$((total_exports - mpv_exports - mak_exports - allowed_extras))
   if (( mpv_exports == EXPECTED_MPV_EXPORTS )); then
     pass "mpv_* exports: $mpv_exports/$EXPECTED_MPV_EXPORTS"
   else
     fail "mpv_* exports: expected $EXPECTED_MPV_EXPORTS, got $mpv_exports"
+  fi
+  if (( mak_exports == EXPECTED_MAK_PCM_EXPORTS )); then
+    pass "mak_pcm_* exports: $mak_exports/$EXPECTED_MAK_PCM_EXPORTS"
+  else
+    fail "mak_pcm_* exports: expected $EXPECTED_MAK_PCM_EXPORTS, got $mak_exports"
   fi
   if (( leaks == 0 )); then
     if (( allowed_extras > 0 )); then
@@ -1399,10 +1407,10 @@ check_binary() {
     # Apple dynamic libraries legitimately export a few CoreFoundation/runtime
     # interop globals alongside mpv_* (the build's own dynsym-hygiene budget is
     # ~60 symbols). Surface them, but don't fail the audio-only invariant on it.
-    warn "$leaks non-mpv export(s) — Apple interop globals (expected): $(grep -vE '^_?mpv_' <<<"$exports" | tr '\n' ' ' | head -c 120)"
+    warn "$leaks non-mpv export(s) — Apple interop globals (expected): $(grep -vE '^_?(mpv|mak_pcm)_' <<<"$exports" | tr '\n' ' ' | head -c 120)"
   else
     fail "$leaks symbols leaked from static deps"
-    grep -vE "(^_?mpv_)|($allowed_extra_re)" <<<"$exports" | head -3 | sed 's/^/     · /'
+    grep -vE "(^_?mpv_)|(^_?mak_pcm_)|($allowed_extra_re)" <<<"$exports" | head -3 | sed 's/^/     · /'
   fi
 
   # ── 2b. Per-slice integrity (Mach-O universal binaries) ──
