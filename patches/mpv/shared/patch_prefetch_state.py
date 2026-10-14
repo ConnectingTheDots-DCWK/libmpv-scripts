@@ -344,6 +344,21 @@ LOADFILE_CALL_SITES = [
 # pristine prefetch_next has no such bail, so this is a no-op there — which
 # keeps this patch independent of patch_prefetch_hook.py.
 LOADFILE_OPTIONAL_CALL_SITES = [
+    # Current hook patch: the bail also covers an entry removed by a client
+    # command while the hook ran.
+    (
+        '        if (entry_removed || mpctx->stop_play || mpctx->open_active) {\n'
+        '            talloc_free(resolved_url);\n'
+        '            return;\n'
+        '        }',
+        '        if (entry_removed || mpctx->stop_play || mpctx->open_active) {\n'
+        '            /* ' + MARKER + ' */\n'
+        '            mak_set_prefetch_state(mpctx, 0 /* idle */);\n'
+        '            talloc_free(resolved_url);\n'
+        '            return;\n'
+        '        }',
+    ),
+    # Older hook patch without the removed check.
     (
         '        if (mpctx->stop_play || mpctx->open_active) {\n'
         '            talloc_free(resolved_url);\n'

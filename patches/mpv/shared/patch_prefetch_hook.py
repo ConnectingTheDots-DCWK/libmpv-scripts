@@ -72,6 +72,16 @@ The workaround: save `mpctx->demuxer`, set it to NULL around the
   - We hold mpctx->demuxer=NULL only for the duration of the synchronous
     hook pump — typically <100 ms — before restoring it.
 
+===== Entry lifetime =====
+
+process_hooks also runs client commands. A `playlist-remove` or
+`playlist-clear` sent while the hook runs can remove the prefetched entry,
+and with `reserved == 0` playlist_remove frees it on the spot. The patch
+takes a reference (`reserved += 1`) before the pump, reads `removed` and
+`stream_flags` after it, drops the reference with playlist_entry_unref and
+skips the prefetch when the entry is gone. play_current_file holds the
+current entry the same way.
+
 ===== Memory =====
 
 The prefetch URL is talloc'd locally (`owned_url`) with parent=NULL. The
@@ -136,6 +146,12 @@ PATCHED = (
     '        /* Run on_load hooks during prefetch so custom URL schemes\n'
     '         * (e.g. plex-transcode://) can be rewritten before the opener\n'
     '         * thread runs. Mirrors the normal play_current_file() path. */\n'
+    '        /* process_hooks runs client commands, so a playlist-remove or\n'
+    '         * playlist-clear can drop new_entry while the hook runs. Hold a\n'
+    '         * reference across the pump, as play_current_file does, and give\n'
+    '         * up if the entry was removed meanwhile. */\n'
+    '        new_entry->reserved += 1;\n'
+    '\n'
     '        char *saved_filename = mpctx->filename;\n'
     '        char *saved_sof = mpctx->stream_open_filename;\n'
     '        char *owned_url = talloc_strdup(NULL, new_entry->filename);\n'
@@ -162,12 +178,17 @@ PATCHED = (
     '        mpctx->stream_open_filename = saved_sof;\n'
     '        talloc_free(owned_url);\n'
     '\n'
-    '        if (mpctx->stop_play || mpctx->open_active) {\n'
+    '        bool entry_removed = new_entry->removed;\n'
+    '        int stream_flags = new_entry->stream_flags;\n'
+    '        playlist_entry_unref(new_entry);\n'
+    '        new_entry = NULL;\n'
+    '\n'
+    '        if (entry_removed || mpctx->stop_play || mpctx->open_active) {\n'
     '            talloc_free(resolved_url);\n'
     '            return;\n'
     '        }\n'
     '\n'
-    '        start_open(mpctx, resolved_url, new_entry->stream_flags, true);\n'
+    '        start_open(mpctx, resolved_url, stream_flags, true);\n'
     '        talloc_free(resolved_url);\n'
     '    }\n'
     '}'
