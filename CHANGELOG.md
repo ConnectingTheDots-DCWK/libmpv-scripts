@@ -1,4 +1,4 @@
-## [0.2.0] - unreleased
+## [0.2.0] - 14-10-2026
 
 ### Breaking
 - On Linux and Android the library's SONAME is `libmpv_audio_kit.so`, so it no longer clashes with another plugin's libmpv. The release asset names are unchanged.
