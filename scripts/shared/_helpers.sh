@@ -31,12 +31,14 @@ die()  { err "$*"; exit 1; }
 fail() { die "$@"; }
 
 # ── Source download with cache ───────────────────────────────────────────────
-# Usage: download <url> <dest_path>
+# Usage: download <url> <dest_path> [mirror_url...]
 # Smart default: an existing non-empty dest is always reused. Pass
 # FORCE_DOWNLOAD=1 to redownload (useful when a tarball is corrupted or the
-# upstream URL points at a moving tag).
+# upstream URL points at a moving tag). The mirrors are tried in order when
+# <url> fails; the file is always checked against the pin of <url>, so a
+# mirror can only serve the same bytes.
 download() {
-  local url="$1" dest="$2"
+  local url="$1" dest="$2"; shift 2
   if [[ -s "$dest" && "${FORCE_DOWNLOAD:-0}" != "1" ]]; then
     ok "Cached: $(basename "$dest")"
     verify_source "$url" "$dest"
@@ -44,13 +46,20 @@ download() {
   fi
   log "Download: $(basename "$dest")"
   mkdir -p "$(dirname "$dest")"
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --retry 3 -o "$dest" "$url" || die "Download failed: $url"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$dest" "$url" || die "Download failed: $url"
-  else
-    die "neither curl nor wget available"
-  fi
+  local from fetched=0
+  for from in "$url" "$@"; do
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsSL --retry 3 -o "$dest" "$from" && fetched=1
+    elif command -v wget >/dev/null 2>&1; then
+      wget -q -O "$dest" "$from" && fetched=1
+    else
+      die "neither curl nor wget available"
+    fi
+    [[ "$fetched" == "1" ]] && break
+    rm -f "$dest"
+    warn "Download failed: $from"
+  done
+  [[ "$fetched" == "1" ]] || die "Download failed: $url"
   verify_source "$url" "$dest"
 }
 

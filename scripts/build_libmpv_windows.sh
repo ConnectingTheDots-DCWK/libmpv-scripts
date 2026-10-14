@@ -156,10 +156,11 @@ export PKG_CONFIG_PATH="$PKG_CONFIG_LIBDIR"
 # Convenience helpers ─────────────────────────────────────────────────────────
 # Downloads through the shared helper (cache, retries, SHA-256 pin check) and
 # prints the archive path. The name argument is kept for readability only.
+# fetch <name> <url> [mirror_url...]
 fetch() {
   local url="$2"
   local archive="$SRC/$(basename "$url")"
-  download "$url" "$archive"
+  download "$url" "$archive" "${@:3}"
   echo "$archive"
 }
 
@@ -232,7 +233,9 @@ fi
 # ── libiconv ──────────────────────────────────────────────────────────────────
 if [[ ! -f "$DIST/lib/libiconv.a" ]]; then
   log "Building libiconv $LIBICONV_VERSION..."
-  IC=$(fetch libiconv "https://ftp.gnu.org/pub/gnu/libiconv/libiconv-${LIBICONV_VERSION}.tar.gz")
+  IC=$(fetch libiconv "https://ftp.gnu.org/pub/gnu/libiconv/libiconv-${LIBICONV_VERSION}.tar.gz" \
+    "https://ftpmirror.gnu.org/libiconv/libiconv-${LIBICONV_VERSION}.tar.gz" \
+    "https://mirrors.kernel.org/gnu/libiconv/libiconv-${LIBICONV_VERSION}.tar.gz")
   tar -xf "$IC" -C "$SRC"
   pushd "$SRC/libiconv-$LIBICONV_VERSION"
     CFLAGS="$CFLAGS_COMMON" ./configure "${AUTOCONF_COMMON[@]}" \
