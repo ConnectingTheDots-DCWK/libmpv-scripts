@@ -51,6 +51,11 @@ selects itself; the app passes the format as file-local options
   AVPacket: a short packet was decoded at full length, padded with zeros
   (Invalid audio PTS, drifting position). It now shortens both. Upstream
   this only hit the last packet of a raw file.
+- Prefetch never opens a mak-pcm entry. It opens the next URL with the
+  current entry's options, then drops the result when the entry's own
+  file-local rawaudio options differ (UPDATE_DEMUXER), which they always
+  do: the stream closed, the one reader was spent and the entry failed.
+  The entry opens when it starts; the app buffers it meanwhile.
 - Only mpv's portable thread primitives (mp_mutex, mp_cond, mp_cancel),
   so it builds on every platform.
 
@@ -70,6 +75,7 @@ Files patched
     demux/demux_raw.c         a live source is read in whole frames as they
                               come, not in blocking 125 ms packets
     demux/packet.c            demux_packet_shorten shortens the AVPacket too
+    player/loadfile.c         prefetch skips a mak-pcm entry
     meson.build               new sources added to the build
 
 Usage
@@ -163,6 +169,21 @@ PACKET_C = [
      '    }\n'),
 ]
 
+# ─── player/loadfile.c ───────────────────────────────────────────────
+
+# The anchor is the same with or without patch_prefetch_hook.py.
+LOADFILE_C = [
+    ('prefetch_next next entry',
+     '    struct playlist_entry *new_entry = mp_next_file(mpctx, +1, false, false);\n',
+     '    struct playlist_entry *new_entry = mp_next_file(mpctx, +1, false, false);\n'
+     '    /* ' + MARKER + ': a mak-pcm id has one reader. A prefetch opens it\n'
+     '     * with the current entry\'s options and is dropped when the entry\'s\n'
+     '     * own rawaudio options apply, which would spend the reader. */\n'
+     '    if (new_entry && new_entry->filename &&\n'
+     '        bstr_case_startswith(bstr0(new_entry->filename), bstr0("mak-pcm://")))\n'
+     '        return;\n'),
+]
+
 # ─── meson.build ──────────────────────────────────────────────────────
 
 MESON = [
@@ -198,6 +219,7 @@ def main():
     replace_once(os.path.join(src, 'stream', 'stream.c'), STREAM_C)
     replace_once(os.path.join(src, 'demux', 'demux_raw.c'), DEMUX_RAW_C)
     replace_once(os.path.join(src, 'demux', 'packet.c'), PACKET_C)
+    replace_once(os.path.join(src, 'player', 'loadfile.c'), LOADFILE_C)
     replace_once(os.path.join(src, 'meson.build'), MESON)
 
 
