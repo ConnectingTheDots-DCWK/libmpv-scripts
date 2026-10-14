@@ -18,6 +18,9 @@ concurrency:
 # artifact holds the line to add.
 env:
   STRICT_SOURCES: '1'
+  # build-push-action uploads a build record per image as an artifact, which
+  # gh run download without a name cannot extract.
+  DOCKER_BUILD_RECORD_UPLOAD: 'false'
 
 # The jobs only read the repository. The artifacts and the build cache use
 # the runner's own token, not GITHUB_TOKEN.
