@@ -1,19 +1,15 @@
 # Mach-O exported-symbols list for libmpv.dylib (macOS and iOS).
 # Passed to ld64 via -Wl,-exported_symbols_list,... (patch_export_filter.py).
 #
-# Only the public mpv_* C API, plus the mak_pcm_* live PCM API listed by name
+# Only the public mpv_* C API, plus the mak_pcm_* live PCM API
 # (patch_pcm_stream.py), leaks into the .dylib's dynamic symbol table.
 # All ffmpeg / freetype / fribidi / harfbuzz / fontconfig / libass / libplacebo /
 # libsmb2 / libxml2 / rubberband / speexdsp internals stay private (they were
 # also linked statically; without this list they would be exported and
 # clash-prone with other Flutter plugins linking the same libs).
 _mpv_*
-_mak_pcm_create
-_mak_pcm_write
-_mak_pcm_finish
-_mak_pcm_abort
-_mak_pcm_buffered
-_mak_pcm_consumed
-_mak_pcm_state
-_mak_pcm_release
-_mak_pcm_release_all
+# The mak_pcm_* API as a glob: ld64 rejects a listed symbol that is not
+# defined, so meson's link test of this flag failed and dropped the whole
+# list. A wildcard skips hidden symbols, so the internal mak_pcm_tap_*
+# (hidden like every mpv symbol) stays out; verify counts exactly nine.
+_mak_pcm_*

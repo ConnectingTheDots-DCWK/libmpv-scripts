@@ -64,8 +64,10 @@ selects itself; the app passes the format as file-local options
 Exports
 =======
 
-The functions carry MPV_EXPORT and are listed by name in mpv.ver,
-mpv_android.ver, mpv.exports and mpv.def, next to the mpv_* API.
+The functions carry MPV_EXPORT and are exported next to the mpv_* API:
+as a glob in mpv.ver, mpv_android.ver and mpv.exports (lld and ld64 fail
+on a named symbol that is not defined, and meson link-tests these flags
+with a bare program), by name in mpv.def.
 
 Files patched
 =============

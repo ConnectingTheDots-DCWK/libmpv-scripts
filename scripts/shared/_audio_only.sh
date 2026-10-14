@@ -683,8 +683,8 @@ apply_mpv_patches_common() {
   _mpv_patch embedded_cover_art patch_embedded_cover_art.py "$mpv_dir"
   _mpv_patch pcm_tap            patch_pcm_tap.py            "$mpv_dir"
   # pcm_stream: live PCM input (mak-pcm://<id> and the mak_pcm_* C API).
-  # Required, not a toggle: the mak_pcm_* names are in every export list
-  # (mpv.ver, mpv_android.ver, mpv.exports, mpv.def), which must resolve.
+  # Required, not a toggle: mpv.def lists the mak_pcm_* names, which must
+  # resolve in the Windows link (the other export lists use a glob).
   python3 "$LIBMPV_SCRIPTS_ROOT/patches/mpv/shared/patch_pcm_stream.py" "$mpv_dir"
   _mpv_patch bulk_analysis      patch_bulk_analysis.py      "$mpv_dir"
   # loudness_scan layers on bulk_analysis (its anchors live in that

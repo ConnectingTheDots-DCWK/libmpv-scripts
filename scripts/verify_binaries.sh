@@ -137,7 +137,7 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
 
 # ── Truth tables ──────────────────────────────────────────────────────────────
 EXPECTED_MPV_EXPORTS=54
-# The live PCM input API (patch_pcm_stream.py), exported by name next to mpv_*.
+# The live PCM input API (patch_pcm_stream.py), exported next to mpv_*.
 EXPECTED_MAK_PCM_EXPORTS=9
 
 EXPECTED_FORMATS=(
