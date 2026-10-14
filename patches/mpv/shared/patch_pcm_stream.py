@@ -56,6 +56,8 @@ selects itself; the app passes the format as file-local options
   file-local rawaudio options differ (UPDATE_DEMUXER), which they always
   do: the stream closed, the one reader was spent and the entry failed.
   The entry opens when it starts; the app buffers it meanwhile.
+- force-seekable does not apply to a mak-pcm stream: a forward seek in
+  demux_raw skips by reading, which would throw live PCM away.
 - Only mpv's portable thread primitives (mp_mutex, mp_cond, mp_cancel),
   so it builds on every platform.
 
@@ -75,6 +77,7 @@ Files patched
     demux/demux_raw.c         a live source is read in whole frames as they
                               come, not in blocking 125 ms packets
     demux/packet.c            demux_packet_shorten shortens the AVPacket too
+    demux/demux.c             force-seekable leaves a mak-pcm stream unseekable
     player/loadfile.c         prefetch skips a mak-pcm entry
     meson.build               new sources added to the build
 
@@ -169,6 +172,21 @@ PACKET_C = [
      '    }\n'),
 ]
 
+# ─── demux/demux.c ───────────────────────────────────────────────────
+
+DEMUX_C = [
+    ('demux.c stream include',
+     '#include "stream/stream.h"\n',
+     '#include "stream/stream.h"\n'
+     '/* ' + MARKER + ' */\n'
+     'extern const stream_info_t stream_info_mak_pcm;\n'),
+    ('force-seekable check',
+     '        if (!in->d_thread->seekable && opts->force_seekable) {\n',
+     '        /* ' + MARKER + ': a live PCM source never seeks. */\n'
+     '        if (!in->d_thread->seekable && opts->force_seekable &&\n'
+     '            !(stream && stream->info == &stream_info_mak_pcm)) {\n'),
+]
+
 # ─── player/loadfile.c ───────────────────────────────────────────────
 
 # The anchor is the same with or without patch_prefetch_hook.py.
@@ -219,6 +237,7 @@ def main():
     replace_once(os.path.join(src, 'stream', 'stream.c'), STREAM_C)
     replace_once(os.path.join(src, 'demux', 'demux_raw.c'), DEMUX_RAW_C)
     replace_once(os.path.join(src, 'demux', 'packet.c'), PACKET_C)
+    replace_once(os.path.join(src, 'demux', 'demux.c'), DEMUX_C)
     replace_once(os.path.join(src, 'player', 'loadfile.c'), LOADFILE_C)
     replace_once(os.path.join(src, 'meson.build'), MESON)
 
