@@ -1005,6 +1005,17 @@ void mak_scan_start(const char *url, double duration_secs,
      * state to "decoding". */
     int new_gen = mak_waveform_begin_generation();
 
+    /* ── LIVE PCM (mak-pcm://<id>): roll, never re-open ─────────────────
+     * The source is read once, by the player: a second open is refused and
+     * would leave the analysis failed. It has no duration, so the waveform
+     * rolls from the af-tap and the loudness scan reports unavailable.
+     * Matched by scheme, whatever flags the stream sets. */
+    const char *pcm_sep = strstr(url, "://");
+    if (pcm_sep && mak_url_scheme_is(url, pcm_sep, "mak-pcm")) {
+        mak_waveform_arm_rolling(new_gen);
+        return;
+    }
+
     /* ── NETWORK adaptive / non-seekable: arm DIRECTLY, never re-open ──────
      * mpv already classified the source (format name + is_network + seekable),
      * so do NOT spawn the coordinator probe for a network HLS/DASH transcode or
