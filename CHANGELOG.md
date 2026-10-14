@@ -13,6 +13,7 @@
 - The loudness scan of a Matroska file no longer reads -70 LUFS: it placed frames by their timestamps, rounded to 1 ms, so no block was complete. It now counts samples, and the waveform of an MP3 no longer ends one encoder delay short.
 - The analysis of a local file gives the result of one decode of it: the parallel workers seeked with no pre-roll, so loudness and peaks drifted at each boundary. Each worker now decodes half a second before its region, and formats whose seek is not sample exact use one worker.
 - The loudness scan of an MP2 file no longer crashes the process or reads garbage peaks: it converted the decoded samples as the probe's sample format, float, while the decoder outputs 16 bit.
+- Enabling the waveform or the loudness scan while a file opens no longer opens it a second time: the scan starts once the file is loaded. An HTTP file was requested twice, and a Jellyfin HLS transcode could fail to open (mpv_audio_kit [#22](https://github.com/ales-drnz/mpv_audio_kit/issues/22)).
 
 ### Changed
 - The waveform and loudness scan of an HTTP file that plays from its start decode it from mpv's demuxer cache instead of opening it again, so the file is downloaded once (mpv_audio_kit [#22](https://github.com/ales-drnz/mpv_audio_kit/issues/22)). When one clean pass from the start is not possible, such as after a seek past the cache, the analysis opens the file again as before, with the same result.

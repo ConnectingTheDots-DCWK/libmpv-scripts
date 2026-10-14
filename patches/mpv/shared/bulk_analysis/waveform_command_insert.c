@@ -47,8 +47,13 @@ static int mp_property_waveform_data(void *ctx, struct m_property *prop,
 /* MAK_WAVEFORM_PATCH ─── read-write FLAG: gates the bulk waveform
  * analyser. OFF by default. Setting it true also kicks the scan
  * engine for the already-loaded file so enabling mid-track works;
- * mak_scan_start null-checks the url. Setting it false cancels any
- * in-flight analysis. */
+ * mak_scan_start null-checks the url. While a file is still opening
+ * (before playback_initialized, which mpv sets right before FILE_LOADED)
+ * it only sets the flag: there is no demuxer yet to classify the source,
+ * so a start here would re-open the URL beside the player's own open (a
+ * second GET, and for an HLS transcode a restart that fails the open).
+ * The FILE_LOADED kick in loadfile.c starts the scan instead. Setting it
+ * false cancels any in-flight analysis. */
 static int mp_property_waveform_enabled(void *ctx, struct m_property *prop,
                                         int action, void *arg)
 {
@@ -63,7 +68,7 @@ static int mp_property_waveform_enabled(void *ctx, struct m_property *prop,
         case M_PROPERTY_SET: {
             bool on = *(int *)arg != 0;
             mak_waveform_set_enabled(on);
-            if (on)
+            if (on && mpctx->playback_initialized)
                 mak_scan_start(mpctx->stream_open_filename,
                                get_time_length(mpctx),
                                mpctx->demuxer ? mpctx->demuxer->filetype : NULL,
