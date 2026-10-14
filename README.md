@@ -39,7 +39,7 @@ On Windows use `build.cmd`. You need Go, plus Docker for Linux, Windows and Andr
 | Linux | x86_64, aarch64 | `libmpv_linux-<arch>.so` |
 | Windows | x86_64, arm64 | `libmpv_windows-<arch>.dll` |
 
-Each library exports only the `mpv_*` C API and carries no video decoders. On Linux and Android its SONAME is `libmpv_audio_kit.so`, so it can live next to another plugin's libmpv. The Linux one needs glibc 2.31 or later and ALSA (`libasound.so.2`). It loads PipeWire and PulseAudio only when they are installed, through stubs made with Implib.so (vendored in `tools/implib`), and skips a PipeWire older than 0.3.57 in favour of PulseAudio, then ALSA.
+Each library exports only the `mpv_*` C API, plus the `mak_pcm_*` functions that feed live PCM to the `mak-pcm` protocol, and carries no video decoders. On Linux and Android its SONAME is `libmpv_audio_kit.so`, so it can live next to another plugin's libmpv. The Linux one needs glibc 2.31 or later and ALSA (`libasound.so.2`). It loads PipeWire and PulseAudio only when they are installed, through stubs made with Implib.so (vendored in `tools/implib`), and skips a PipeWire older than 0.3.57 in favour of PulseAudio, then ALSA.
 
 The versions of mpv, FFmpeg and every other dependency are set in `scripts/shared/_versions.sh`, and `scripts/shared/_sources.sha256` pins each source tarball by its SHA-256 and each git source (libplacebo, libsmb2, PipeWire) by the commit of its tag. A build also writes `builds/release/manifest.json`, with the versions, the compiled audio filters and the hash of every library.
 
@@ -260,7 +260,7 @@ The Manifest action in the Tools tab writes `builds/release/manifest.json` for a
 
 `./build` is a small Go program ([Bubble Tea](https://github.com/charmbracelet/bubbletea)) that runs the shell scripts in `scripts/`, one per platform. Apple targets build with Xcode on the host. Linux, Windows and Android build inside a Docker image from `docker/Dockerfile`, which has one stage per platform, so you only keep the toolchains you use.
 
-Each build downloads the pinned sources, applies the patches in `patches/` to mpv and FFmpeg, compiles only the audio parts, and strips the library down to the `mpv_*` API. Every patch finds its place by exact text and stops the build if upstream has changed underneath it.
+Each build downloads the pinned sources, applies the patches in `patches/` to mpv and FFmpeg, compiles only the audio parts, and strips the library down to the `mpv_*` and `mak_pcm_*` API. Every patch finds its place by exact text and stops the build if upstream has changed underneath it.
 
 ---
 

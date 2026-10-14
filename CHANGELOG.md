@@ -5,6 +5,10 @@
 - The per-filter tap is keyed on chain labels instead of filter types: `analyzer-taps` and `audio-tap-frames` take and return labels, and two instances of one filter get separate rings.
 - The Checksums, libs and Clean actions are gone, since mpv_audio_kit 0.5.0 takes libmpv through its build hook. The new Manifest action writes `manifest.json`.
 
+### Added
+- Live PCM input: the `mak-pcm` protocol plays raw PCM that the app feeds through the exported `mak_pcm_*` functions, with no temp file or callback on an mpv thread. The analysis never opens it a second time (mpv_audio_kit [#27](https://github.com/ales-drnz/mpv_audio_kit/issues/27), `patch_pcm_stream.py`).
+- The raw audio demuxer hands a live source over as it arrives instead of in blocking 125 ms packets, and a shortened packet is decoded at its real length.
+
 ### Fixed
 - Removing or rebuilding a filter that holds the end of the file, such as `rubberband` in the last few hundred milliseconds, no longer stops playback there for good: mpv re-seeks to decode the end again (`patch_chain_eof.py`).
 - The same holds right after a seek: a filter with a long look-ahead, such as `dynaudnorm`, can take a short file whole with its end before playback restarts, and replacing it then stalled playback for good after a fraction of a second (`patch_chain_eof.py`).
