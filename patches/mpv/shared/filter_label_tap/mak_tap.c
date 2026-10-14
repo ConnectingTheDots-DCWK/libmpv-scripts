@@ -5,8 +5,9 @@
  *
  * Producer (writer): the audio-filter thread, which calls
  *     mak_tap_write() from inside user_wrapper_process for every
- *     frame the active filters produce. The chain is
- *     single-threaded — only one writer at a time per ring.
+ *     frame the active filters produce. Each mpv instance has its
+ *     own chain thread but the rings are process-wide, so writers
+ *     take g_tap_write_lock: one writer at a time per ring.
  *
  * Consumer (reader): the mpv main thread, which drains the ring
  *     via the audio-tap-frames property getter at the wrapper's
@@ -146,9 +147,10 @@ static struct {
      * whole slot table at once and run rarely (on subscriber
      * subscribe / unsubscribe), so a mutex is fine. */
     struct tap_slot  slots[MAK_TAP_MAX];
-    /* Single-writer scratch; the audio chain is single-threaded
-     * so concurrent writers cannot collide here. */
+    /* Conversion scratch and mono downmix, shared by every mpv
+     * instance in the process: guarded by g_tap_write_lock. */
     float            scratch[TAP_SCRATCH_FLOATS];
+    float            mono[TAP_SCRATCH_FLOATS];
 } g_tap;
 /* The lock lives OUTSIDE the state struct on purpose: Darwin's
  * PTHREAD_MUTEX_INITIALIZER carries a non-zero signature, and a single
@@ -159,6 +161,12 @@ static struct {
  * cost. (ELF/PE are immune: their static lock initializers are all
  * zero.) */
 static mp_mutex g_tap_activation_lock = MP_STATIC_MUTEX_INITIALIZER;
+/* Serialises the writers: each mpv instance has its own audio chain
+ * thread, and two of them tapping the same label (or folding the
+ * waveform) would share one ring and one scratch. Never contended with
+ * a single player; the reader stays lock-free on the seqlock. Lock
+ * order: g_tap_activation_lock before g_tap_write_lock. */
+static mp_mutex g_tap_write_lock = MP_STATIC_MUTEX_INITIALIZER;
 
 /* Lock-free probe — atomic_load on the slot.used flag (acquire
  * orders the subsequent name read against the matching
@@ -177,26 +185,29 @@ static int find_slot(const char *name)
     return -1;
 }
 
-/* Reset a ring's metadata. Called by the writer (under seqlock)
- * on format change to discard accumulated samples, and by the
- * activation path (set_active) to clear stale state when a slot
- * is re-armed. The buf pointer + capacity are NOT touched here —
- * those are owned exclusively by the writer (single-thread
- * invariant) and freed/reallocated inside the writer's seqlock.
+/* Reset a ring's metadata. Called by the activation path
+ * (set_active) to clear stale state when a slot is re-armed; the
+ * writer resets inline on a format change. The buf pointer +
+ * capacity are NOT touched here — those are owned by the writer
+ * and set inside the writer's seqlock.
  * Leaving the buffer alive across activation cycles costs at most
  * 8 slots × 2 sides × 16 MB = 256 MB worst case (typical: a few
  * MB) but eliminates the use-after-free race that would arise if
  * the main thread freed the buffer mid-write. */
 static void reset_ring(struct tap_ring *r)
 {
+    /* Caller holds g_tap_write_lock, so no writer is inside its
+     * seqlock section: open and close the seqlock here too, so a
+     * concurrent reader retries instead of mixing old and new
+     * metadata. */
+    uint_fast32_t s = atomic_load_explicit(&r->seq, memory_order_relaxed);
+    atomic_store_explicit(&r->seq, s + 1, memory_order_release);
     r->sample_rate  = 0;
     r->channels     = 0;
     r->end_pts_secs = NAN;
     r->write_pos    = 0;
     r->valid_bytes  = 0;
-    /* seq stays where it is — the seqlock invariant is preserved
-     * because the activation_lock barrier orders the next write
-     * after this reset. */
+    atomic_store_explicit(&r->seq, s + 2, memory_order_release);
 }
 
 void mak_tap_set_active(const char *csv)
@@ -217,11 +228,13 @@ void mak_tap_set_active(const char *csv)
      * against the still-valid buf; its write goes to the now-
      * orphaned ring and the next reader for that slot won't see
      * it (used == false). */
+    mp_mutex_lock(&g_tap_write_lock);
     for (int i = 0; i < MAK_TAP_MAX; i++) {
         g_tap.slots[i].name[0] = 0;
         reset_ring(&g_tap.slots[i].pre);
         reset_ring(&g_tap.slots[i].post);
     }
+    mp_mutex_unlock(&g_tap_write_lock);
 
     if (!csv || !*csv) {
         mp_mutex_unlock(&g_tap_activation_lock);
@@ -280,29 +293,32 @@ bool mak_tap_label_active(const char *name)
     return find_slot(name) >= 0;
 }
 
-/* Convert a planar / packed PCM aframe into interleaved Float32,
- * writing into `dst` (capacity `dst_cap` floats). Returns the
- * number of float samples written, or 0 if the format is not
- * supported. Mirrors mak_pcm_tap.c::convert_to_float. */
-static size_t convert_aframe(struct mp_aframe *aframe,
+/* Convert part of a planar / packed PCM aframe into interleaved Float32,
+ * writing into `dst` (capacity `dst_cap` floats). Starts at sample
+ * `offset` and converts as many whole samples as fit, so a caller loops
+ * over a frame larger than its scratch in chunks instead of dropping the
+ * tail. Channels past TAP_MAX_CHANNELS are skipped; packed input keeps
+ * the source stride. Returns the number of floats written (a multiple of
+ * the output channel count), or 0 at the end of the frame or for an
+ * unsupported format. Mirrors mak_pcm_tap.c::convert_to_float. */
+static size_t convert_aframe(struct mp_aframe *aframe, int offset,
                              float *dst, size_t dst_cap,
                              int *out_channels, int *out_rate)
 {
     int format   = mp_aframe_get_format(aframe);
     if (!af_fmt_is_pcm(format)) return 0;
-    int channels = mp_aframe_get_channels(aframe);
+    int src_ch   = mp_aframe_get_channels(aframe);
     int rate     = mp_aframe_get_rate(aframe);
     int samples  = mp_aframe_get_size(aframe);
-    if (channels <= 0 || rate <= 0 || samples <= 0) return 0;
-    if (channels > TAP_MAX_CHANNELS) channels = TAP_MAX_CHANNELS;
+    if (src_ch <= 0 || rate <= 0 || samples <= 0) return 0;
+    if (offset < 0 || offset >= samples) return 0;
+    int channels = src_ch > TAP_MAX_CHANNELS ? TAP_MAX_CHANNELS : src_ch;
 
+    samples -= offset;
+    size_t fit = dst_cap / (size_t)channels;
+    if (fit == 0) return 0;
+    if ((size_t)samples > fit) samples = (int)fit;
     size_t total = (size_t)samples * (size_t)channels;
-    if (total == 0 || total > dst_cap) {
-        /* truncate to fit */
-        samples = (int)(dst_cap / (size_t)channels);
-        total   = (size_t)samples * (size_t)channels;
-        if (total == 0) return 0;
-    }
 
     uint8_t **data = mp_aframe_get_data_ro(aframe);
     if (!data) return 0;
@@ -310,94 +326,56 @@ static size_t convert_aframe(struct mp_aframe *aframe,
     *out_channels = channels;
     *out_rate     = rate;
 
-    switch (format) {
+    bool planar = af_fmt_is_planar(format);
+    size_t base = planar ? (size_t)offset : (size_t)offset * (size_t)src_ch;
+
+#define MAK_TAP_CONV(T, EXPR)                                              \
+    do {                                                                   \
+        if (planar) {                                                      \
+            T **pl = (T **)data;                                           \
+            for (int s = 0; s < samples; s++)                              \
+                for (int c = 0; c < channels; c++) {                       \
+                    T v = pl[c][base + s];                                 \
+                    dst[s * channels + c] = (EXPR);                        \
+                }                                                          \
+        } else {                                                           \
+            const T *pk = (const T *)data[0] + base;                       \
+            for (int s = 0; s < samples; s++)                              \
+                for (int c = 0; c < channels; c++) {                       \
+                    T v = pk[(size_t)s * src_ch + c];                      \
+                    dst[s * channels + c] = (EXPR);                        \
+                }                                                          \
+        }                                                                  \
+    } while (0)
+
+    switch (af_fmt_from_planar(format)) {
         case AF_FORMAT_FLOAT:
-            memcpy(dst, data[0], total * sizeof(float));
+            if (!planar && channels == src_ch) {
+                memcpy(dst, (const float *)data[0] + base,
+                       total * sizeof(float));
+            } else {
+                MAK_TAP_CONV(float, v);
+            }
             return total;
-        case AF_FORMAT_FLOATP: {
-            float **p = (float **)data;
-            for (int s = 0; s < samples; s++)
-                for (int c = 0; c < channels; c++)
-                    dst[s * channels + c] = p[c][s];
+        case AF_FORMAT_S16:
+            MAK_TAP_CONV(int16_t, (float)v * (1.0f / 32768.0f));
             return total;
-        }
-        case AF_FORMAT_S16: {
-            const int16_t *p = (const int16_t *)data[0];
-            const float scale = 1.0f / 32768.0f;
-            for (size_t i = 0; i < total; i++)
-                dst[i] = (float)p[i] * scale;
+        case AF_FORMAT_S32:
+            MAK_TAP_CONV(int32_t, (float)v * (1.0f / 2147483648.0f));
             return total;
-        }
-        case AF_FORMAT_S16P: {
-            int16_t **p = (int16_t **)data;
-            const float scale = 1.0f / 32768.0f;
-            for (int s = 0; s < samples; s++)
-                for (int c = 0; c < channels; c++)
-                    dst[s * channels + c] = (float)p[c][s] * scale;
+        case AF_FORMAT_S64:
+            MAK_TAP_CONV(int64_t, (float)v * 1.0842021724855044e-19f);
             return total;
-        }
-        case AF_FORMAT_S32: {
-            const int32_t *p = (const int32_t *)data[0];
-            const float scale = 1.0f / 2147483648.0f;
-            for (size_t i = 0; i < total; i++)
-                dst[i] = (float)p[i] * scale;
+        case AF_FORMAT_U8:
+            MAK_TAP_CONV(uint8_t, ((float)v - 128.0f) * (1.0f / 128.0f));
             return total;
-        }
-        case AF_FORMAT_S32P: {
-            int32_t **p = (int32_t **)data;
-            const float scale = 1.0f / 2147483648.0f;
-            for (int s = 0; s < samples; s++)
-                for (int c = 0; c < channels; c++)
-                    dst[s * channels + c] = (float)p[c][s] * scale;
+        case AF_FORMAT_DOUBLE:
+            MAK_TAP_CONV(double, (float)v);
             return total;
-        }
-        case AF_FORMAT_S64: {
-            const int64_t *p = (const int64_t *)data[0];
-            const float scale = 1.0842021724855044e-19f;
-            for (size_t i = 0; i < total; i++)
-                dst[i] = (float)p[i] * scale;
-            return total;
-        }
-        case AF_FORMAT_S64P: {
-            int64_t **p = (int64_t **)data;
-            const float scale = 1.0842021724855044e-19f;
-            for (int s = 0; s < samples; s++)
-                for (int c = 0; c < channels; c++)
-                    dst[s * channels + c] = (float)p[c][s] * scale;
-            return total;
-        }
-        case AF_FORMAT_U8: {
-            const uint8_t *p = (const uint8_t *)data[0];
-            const float scale = 1.0f / 128.0f;
-            for (size_t i = 0; i < total; i++)
-                dst[i] = ((float)p[i] - 128.0f) * scale;
-            return total;
-        }
-        case AF_FORMAT_U8P: {
-            uint8_t **p = (uint8_t **)data;
-            const float scale = 1.0f / 128.0f;
-            for (int s = 0; s < samples; s++)
-                for (int c = 0; c < channels; c++)
-                    dst[s * channels + c] =
-                        ((float)p[c][s] - 128.0f) * scale;
-            return total;
-        }
-        case AF_FORMAT_DOUBLE: {
-            const double *p = (const double *)data[0];
-            for (size_t i = 0; i < total; i++)
-                dst[i] = (float)p[i];
-            return total;
-        }
-        case AF_FORMAT_DOUBLEP: {
-            double **p = (double **)data;
-            for (int s = 0; s < samples; s++)
-                for (int c = 0; c < channels; c++)
-                    dst[s * channels + c] = (float)p[c][s];
-            return total;
-        }
         default:
             return 0;
     }
+#undef MAK_TAP_CONV
 }
 
 /* MAK_TAP_PATCH_V4 ─── pre-DSP waveform fold from the af chain
@@ -406,27 +384,58 @@ static size_t convert_aframe(struct mp_aframe *aframe,
  * and folds it into the progressive waveform envelope, per-bin by PTS.
  * Only fires for the "in" filter and only while a progressive analysis
  * is active; for every other filter / state it is one strcmp + one
- * atomic load. Single-threaded core path — reuses g_tap.scratch
- * sequentially with mak_tap_write (never concurrently). */
+ * atomic load. The scratch buffers are shared by every mpv instance in
+ * the process, so the conversion runs under g_tap_write_lock. A frame
+ * larger than the scratch is folded in chunks. */
 void mak_waveform_tap_in(const char *name, struct mp_aframe *aframe)
 {
     if (!name || !aframe) return;
     if (strcmp(name, "in") != 0) return;
     if (!mak_waveform_wants_frames()) return;
     int gen = mak_waveform_current_gen();
-    int channels = 0, rate = 0;
-    size_t produced = convert_aframe(aframe, g_tap.scratch,
-                                     TAP_SCRATCH_FLOATS,
-                                     &channels, &rate);
-    if (produced == 0 || channels <= 0 || rate <= 0) return;
-    int n = (int)(produced / (size_t)channels);
-    if (n <= 0) return;
-    /* Mono downmix into a process-static buffer (single-threaded core
-     * path; n <= TAP_SCRATCH_FLOATS since produced == n * channels). */
-    static float mono[TAP_SCRATCH_FLOATS];
-    mak_downmix_mono(g_tap.scratch, n, channels, mono);
-    mak_waveform_fold_samples(mono, n, mp_aframe_get_pts(aframe),
-                              rate, gen);
+    double pts = mp_aframe_get_pts(aframe);
+    mp_mutex_lock(&g_tap_write_lock);
+    int offset = 0;
+    for (;;) {
+        int channels = 0, rate = 0;
+        size_t produced = convert_aframe(aframe, offset, g_tap.scratch,
+                                         TAP_SCRATCH_FLOATS,
+                                         &channels, &rate);
+        if (produced == 0 || channels <= 0 || rate <= 0) break;
+        int n = (int)(produced / (size_t)channels);
+        if (n <= 0) break;
+        mak_downmix_mono(g_tap.scratch, n, channels, g_tap.mono);
+        mak_waveform_fold_samples(g_tap.mono, n,
+                                  pts + (double)offset / (double)rate,
+                                  rate, gen);
+        offset += n;
+    }
+    mp_mutex_unlock(&g_tap_write_lock);
+}
+
+/* Append `bytes` from `src` to the ring with wrap. Caller holds the
+ * seqlock open and g_tap_write_lock. */
+static void ring_append(struct tap_ring *ring, const uint8_t *src,
+                        size_t bytes)
+{
+    if (bytes > ring->capacity) {
+        /* Only the newest `capacity` bytes survive anyway. */
+        src += bytes - ring->capacity;
+        bytes = ring->capacity;
+    }
+    size_t remaining = bytes;
+    while (remaining > 0) {
+        size_t free_until_end = ring->capacity - ring->write_pos;
+        size_t copy = remaining < free_until_end ? remaining
+                                                 : free_until_end;
+        memcpy(&ring->buf[ring->write_pos], src, copy);
+        ring->write_pos = (ring->write_pos + copy) % ring->capacity;
+        src += copy;
+        remaining -= copy;
+    }
+    ring->valid_bytes += bytes;
+    if (ring->valid_bytes > ring->capacity)
+        ring->valid_bytes = ring->capacity;
 }
 
 void mak_tap_write(const char *name, bool is_post,
@@ -442,19 +451,23 @@ void mak_tap_write(const char *name, bool is_post,
     struct tap_ring *ring = is_post ? &g_tap.slots[idx].post
                                     : &g_tap.slots[idx].pre;
 
-    /* Convert the aframe into the per-process scratch. The
-     * audio chain is single-threaded so concurrent writers
-     * cannot collide here, and we do this OUTSIDE the seqlock
-     * critical section so the conversion (which dominates the
-     * write cost) does not delay any concurrent reader. */
+    /* The rings and the scratch are process-wide, but every mpv
+     * instance runs its own audio chain. Two players tapping the same
+     * label would otherwise write one ring from two threads, and the
+     * seqlock below supports a single writer only. One player never
+     * contends on this lock; readers never take it. */
+    mp_mutex_lock(&g_tap_write_lock);
+
     int channels = 0, rate = 0;
-    size_t produced = convert_aframe(aframe, g_tap.scratch,
+    size_t produced = convert_aframe(aframe, 0, g_tap.scratch,
                                      TAP_SCRATCH_FLOATS,
                                      &channels, &rate);
-    if (produced == 0 || channels <= 0 || rate <= 0) return;
+    if (produced == 0 || channels <= 0 || rate <= 0) {
+        mp_mutex_unlock(&g_tap_write_lock);
+        return;
+    }
 
-    /* PTS extraction (also outside seqlock — pure read of frame
-     * metadata). */
+    /* PTS extraction (pure read of frame metadata). */
     int frame_size   = mp_aframe_get_size(aframe);
     double frame_pts = mp_aframe_get_pts(aframe);
 
@@ -486,9 +499,6 @@ void mak_tap_write(const char *name, bool is_post,
      * alignment for the few-frame chain pre-buffer phase — same
      * trade-off VLC / JUCE / Voxengo accept. Reverse case (high
      * rate first, low rate later) gives extra headroom for free. */
-    /* First-write allocation. Sized once based on the FIRST format
-     * we see, capped at TAP_MAX_RING_BYTES. Buf pointer +
-     * alloc_bytes are immutable for the rest of the slot's life. */
     if (ring->buf == NULL) {
         size_t frame_bytes = (size_t)channels * sizeof(float);
         size_t needed =
@@ -522,26 +532,22 @@ void mak_tap_write(const char *name, bool is_post,
         /* Allocation failed — close the seqlock cleanly and bail.
          * Reader will see valid_bytes==0 and report no data. */
         atomic_store_explicit(&ring->seq, s + 2, memory_order_release);
+        mp_mutex_unlock(&g_tap_write_lock);
         return;
     }
 
-    /* Append to the ring with wrap. */
-    size_t bytes = produced * sizeof(float);
-    if (bytes > ring->capacity) bytes = ring->capacity;
-    const uint8_t *src = (const uint8_t *)g_tap.scratch;
-    size_t remaining = bytes;
-    while (remaining > 0) {
-        size_t free_until_end = ring->capacity - ring->write_pos;
-        size_t copy = remaining < free_until_end ? remaining
-                                                 : free_until_end;
-        memcpy(&ring->buf[ring->write_pos], src, copy);
-        ring->write_pos = (ring->write_pos + copy) % ring->capacity;
-        src += copy;
-        remaining -= copy;
+    /* Append the whole frame, converting it in scratch-sized chunks
+     * so frames larger than the scratch (FLAC blocks of 4608 stereo
+     * samples, AC3 5.1) keep every sample and the PTS stays aligned. */
+    int offset = 0;
+    while (produced > 0) {
+        ring_append(ring, (const uint8_t *)g_tap.scratch,
+                    produced * sizeof(float));
+        offset += (int)(produced / (size_t)channels);
+        int ch2 = 0, rate2 = 0;
+        produced = convert_aframe(aframe, offset, g_tap.scratch,
+                                  TAP_SCRATCH_FLOATS, &ch2, &rate2);
     }
-    ring->valid_bytes += bytes;
-    if (ring->valid_bytes > ring->capacity)
-        ring->valid_bytes = ring->capacity;
 
     /* Advance the playback-PTS coordinate of the ring tail. */
     if (frame_pts > -1e18 && frame_size > 0 && rate > 0) {
@@ -554,6 +560,7 @@ void mak_tap_write(const char *name, bool is_post,
 
     /* SEQLOCK END — increment to even, ring is stable again. */
     atomic_store_explicit(&ring->seq, s + 2, memory_order_release);
+    mp_mutex_unlock(&g_tap_write_lock);
 }
 
 /* Build a {sample_rate, channels, pts_ns, samples} map for `ring`,
