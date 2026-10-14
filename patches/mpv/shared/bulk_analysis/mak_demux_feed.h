@@ -93,7 +93,9 @@ enum mak_feed_item mak_demux_feed_replay(struct mak_demux_feed *f,
                                          struct demux_packet **out, int max,
                                          int *n);
 
-/* Consumer side. Waits up to [timeout_ns] for the next item. */
+/* Consumer side. Waits up to [timeout_ns] for the next item. Once the
+ * demuxer is gone the queue is drained only if it holds an EOF (a complete
+ * pass); otherwise it is dropped and MAK_FEED_CLOSED returned at once. */
 enum mak_feed_item mak_demux_feed_pop(struct mak_demux_feed *f,
                                       struct demux_packet **out,
                                       int64_t timeout_ns);

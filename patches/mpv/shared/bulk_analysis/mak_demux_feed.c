@@ -40,6 +40,7 @@ struct mak_demux_feed {
     size_t bytes;
     bool consumer_closed;
     bool owner_gone;
+    bool gone_checked;  /* pop looked for an EOF after owner_gone */
     bool cut;           /* a GAP ends the pass: no more packets */
     /* Demuxer side only (under the demuxer's lock). */
     const void *last_queue;
@@ -94,11 +95,8 @@ void mak_feed_guard_unlock(struct mak_feed_guard *g)
     mp_mutex_unlock(&g->lock);
 }
 
-static void feed_unref(struct mak_demux_feed *f)
+static void free_items(struct feed_item *it)
 {
-    if (atomic_fetch_sub(&f->refs, 1) != 1)
-        return;
-    struct feed_item *it = f->head;
     while (it) {
         struct feed_item *next = it->next;
         if (it->dp)
@@ -106,6 +104,13 @@ static void feed_unref(struct mak_demux_feed *f)
         free(it);
         it = next;
     }
+}
+
+static void feed_unref(struct mak_demux_feed *f)
+{
+    if (atomic_fetch_sub(&f->refs, 1) != 1)
+        return;
+    free_items(f->head);
     mak_feed_guard_unref(f->replay.guard);
     mp_cond_destroy(&f->wakeup);
     mp_mutex_destroy(&f->lock);
@@ -280,6 +285,29 @@ enum mak_feed_item mak_demux_feed_pop(struct mak_demux_feed *f,
         }
         mp_cond_timedwait(&f->wakeup, &f->lock, left);
     }
+    if (f->owner_gone && !f->gone_checked) {
+        /* The demuxer went away (stop, next file). Without an EOF in the
+         * queue the pass can never complete, so decoding the rest (up to
+         * MAK_FEED_MAX_BYTES of a file no longer playing) is wasted work:
+         * drop it and report CLOSED now. A queued EOF means the download
+         * finished, so that pass is still drained to the end. */
+        f->gone_checked = true;
+        bool has_eof = false;
+        for (struct feed_item *q = f->head; q; q = q->next) {
+            if (q->kind == MAK_FEED_EOF) {
+                has_eof = true;
+                break;
+            }
+        }
+        if (!has_eof) {
+            struct feed_item *drop = f->head;
+            f->head = f->tail = NULL;
+            f->bytes = 0;
+            mp_mutex_unlock(&f->lock);
+            free_items(drop);
+            return MAK_FEED_CLOSED;
+        }
+    }
     struct feed_item *it = f->head;
     if (!it) {
         mp_mutex_unlock(&f->lock);
@@ -304,12 +332,6 @@ void mak_demux_feed_close(struct mak_demux_feed *f)
     f->head = f->tail = NULL;
     f->bytes = 0;
     mp_mutex_unlock(&f->lock);
-    while (it) {
-        struct feed_item *next = it->next;
-        if (it->dp)
-            free_demux_packet(it->dp);
-        free(it);
-        it = next;
-    }
+    free_items(it);
     feed_unref(f);
 }

@@ -265,6 +265,7 @@ static MP_THREAD_VOID feed_main(void *p)
 #endif
     bool complete = false;
     bool reopen = false;
+    bool closed = false;
 
     const AVCodec *codec = avcodec_find_decoder(a->par->codec_id);
     d.dec = codec ? avcodec_alloc_context3(codec) : NULL;
@@ -303,8 +304,10 @@ static MP_THREAD_VOID feed_main(void *p)
         }
         if (item == MAK_FEED_TIMEOUT)
             continue;
-        if (item == MAK_FEED_CLOSED)
+        if (item == MAK_FEED_CLOSED) {
+            closed = true;
             break;
+        }
         if (item == MAK_FEED_BOF && !d.from_bof) {
             d.from_bof = true;
             continue;
@@ -365,6 +368,11 @@ static MP_THREAD_VOID feed_main(void *p)
      * from a clean state, as it would have without the feed. */
     if (reopen && mak_waveform_fed_abandon(a->gen))
         mak_scan_reopen(a->gen, a->url, a->duration_secs, a->net_opts);
+    /* The demuxer went away before the end (stop, next file): nothing will
+     * finish this generation, so close it instead of leaving a partial
+     * envelope on "progressive" and the loudness on "scanning". */
+    if (closed && !complete && mak_waveform_fed_abandon(a->gen))
+        goto fail;
     goto done;
 
 fail:
