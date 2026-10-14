@@ -25,10 +25,13 @@ old = (
     '{'
 )
 
+MARKER = 'mpv_audio_kit: parse_afmt reset'
+
 new = (
     'static int parse_afmt(struct mp_log *log, const m_option_t *opt,\n'
     '                      struct bstr name, struct bstr param, void *dst)\n'
     '{\n'
+    '    // ' + MARKER + '\n'
     '    // Allow "" and "no" to reset to AF_FORMAT_UNKNOWN (auto/default).\n'
     '    if (param.len == 0 || bstr_equals0(param, "no")) {\n'
     '        if (dst)\n'
@@ -37,8 +40,14 @@ new = (
     '    }'
 )
 
-if old not in content:
-    print(f"WARNING: Could not find parse_afmt signature in {fn}")
+# A second run would insert the block again in front of the first one.
+if MARKER in content:
+    print("Already patched: m_option.c parse_afmt reset")
+    sys.exit(0)
+
+if content.count(old) != 1:
+    print(f"ERROR: parse_afmt signature not found exactly once in {fn}",
+          file=sys.stderr)
     sys.exit(1)
 
 content = content.replace(old, new, 1)

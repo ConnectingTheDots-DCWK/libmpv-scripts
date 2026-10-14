@@ -31,12 +31,15 @@ if n_lp == 0:
              f"in {fn} — mpv source layout changed")
 
 # libass: make optional. Idempotent — on a re-run the unpatched anchor is
-# gone but the patched form is present, which is not an error.
+# gone but the patched form is present, which is not an error. Neither is
+# a tree where patch_strip_libass.py already dropped the line and swapped
+# in its stub source.
 LA_OLD = "libass = dependency('libass', version: '>= 0.12.2')"
 LA_NEW = "libass = dependency('libass', version: '>= 0.12.2', required: false)"
+LA_STRIPPED = "'sub/stub_libass.c'"
 if LA_OLD in content:
     content = content.replace(LA_OLD, LA_NEW, 1)
-elif LA_NEW not in content:
+elif LA_NEW not in content and LA_STRIPPED not in content:
     sys.exit(f"[patch_optional_deps] libass dependency() call not found "
              f"in {fn} — mpv source layout changed")
 
