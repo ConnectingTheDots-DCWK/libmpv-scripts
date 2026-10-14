@@ -470,6 +470,14 @@ bool mak_loudness_is_enabled(void)
     return atomic_load(&g_loud_enabled);
 }
 
+bool mak_loudness_is_scanning(void)
+{
+    mp_mutex_lock(&g_loud_lock);
+    bool scanning = g_loud.state == MAK_LOUD_SCANNING;
+    mp_mutex_unlock(&g_loud_lock);
+    return scanning;
+}
+
 /* energy → loudness; the -0.691 offset is the BS.1770 calibration. */
 static inline double energy_to_lufs(double e)
 {

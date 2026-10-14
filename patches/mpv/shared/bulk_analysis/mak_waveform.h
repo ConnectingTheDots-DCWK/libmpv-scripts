@@ -81,10 +81,12 @@ void mak_waveform_update_cache_range(double begin_secs, double end_secs);
  * to bail, and clears the visible state. Idempotent. */
 void mak_waveform_stop(void);
 
-/* Enable / disable the analyzer. Disabling also stops any in-flight
- * analysis. Enabling does NOT itself kick a decode — the caller is
- * responsible for calling mak_scan_start() for the loaded file. */
-void mak_waveform_set_enabled(bool on);
+/* Enable / disable the analyzer. Turning it off stops any in-flight
+ * analysis; setting off again leaves a loudness-only pass alone.
+ * Enabling does NOT itself kick a decode — the caller is responsible
+ * for calling mak_scan_start() for the loaded file. Returns the
+ * previous value. */
+bool mak_waveform_set_enabled(bool on);
 
 /* Whether the analyzer is currently enabled. */
 bool mak_waveform_is_enabled(void);

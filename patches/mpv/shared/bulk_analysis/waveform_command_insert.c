@@ -44,6 +44,13 @@ static int mp_property_waveform_data(void *ctx, struct m_property *prop,
     return M_PROPERTY_NOT_IMPLEMENTED;
 }
 
+#if __has_include("audio/mak_loudness.h")
+#include "audio/mak_loudness.h"
+#define MAK_WAVEFORM_SETTER_LOUDNESS 1
+#else
+#define MAK_WAVEFORM_SETTER_LOUDNESS 0
+#endif
+
 /* MAK_WAVEFORM_PATCH ─── read-write FLAG: gates the bulk waveform
  * analyser. OFF by default. Setting it true also kicks the scan
  * engine for the already-loaded file so enabling mid-track works;
@@ -53,7 +60,10 @@ static int mp_property_waveform_data(void *ctx, struct m_property *prop,
  * so a start here would re-open the URL beside the player's own open (a
  * second GET, and for an HLS transcode a restart that fails the open).
  * The FILE_LOADED kick in loadfile.c starts the scan instead. Setting it
- * false cancels any in-flight analysis. */
+ * false cancels any in-flight analysis. The loudness scan rides the same
+ * decode pass, so when it is still scanning the pass restarts for the
+ * loudness alone; otherwise it would stay on "scanning" until the next
+ * file. */
 static int mp_property_waveform_enabled(void *ctx, struct m_property *prop,
                                         int action, void *arg)
 {
@@ -67,8 +77,16 @@ static int mp_property_waveform_enabled(void *ctx, struct m_property *prop,
             return M_PROPERTY_OK;
         case M_PROPERTY_SET: {
             bool on = *(int *)arg != 0;
-            mak_waveform_set_enabled(on);
-            if (on && mpctx->playback_initialized)
+            bool was_on = mak_waveform_set_enabled(on);
+            bool start = on;
+#if MAK_WAVEFORM_SETTER_LOUDNESS
+            if (!on && was_on && mak_loudness_is_enabled() &&
+                mak_loudness_is_scanning())
+                start = true;
+#else
+            (void)was_on;
+#endif
+            if (start && mpctx->playback_initialized)
                 mak_scan_start(mpctx->stream_open_filename,
                                get_time_length(mpctx),
                                mpctx->demuxer ? mpctx->demuxer->filetype : NULL,

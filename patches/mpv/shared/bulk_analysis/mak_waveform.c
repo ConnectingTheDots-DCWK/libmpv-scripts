@@ -557,13 +557,15 @@ void mak_waveform_stop(void)
     (void)new_gen;
 }
 
-void mak_waveform_set_enabled(bool on)
+bool mak_waveform_set_enabled(bool on)
 {
-    atomic_store(&g_enabled, on);
+    bool was_on = atomic_exchange(&g_enabled, on);
     /* Turning the gate off also cancels any in-flight analysis and
-     * clears the visible state. */
-    if (!on)
+     * clears the visible state. Only on a real change: with the flag
+     * already off the running pass belongs to the loudness scan. */
+    if (!on && was_on)
         mak_waveform_stop();
+    return was_on;
 }
 
 bool mak_waveform_is_enabled(void)
