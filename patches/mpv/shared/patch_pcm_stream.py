@@ -215,16 +215,20 @@ MESON = [
 
 
 def write_new_file(path, content):
-    """Idempotent: rewrite a file a prior run wrote, refuse anything else."""
+    """Idempotent: refresh a file a prior run wrote, refuse anything else."""
+    verb = 'Created: '
     if os.path.exists(path):
         with open(path) as f:
-            if MARKER in f.read():
-                print(f'Already present: {path}')
-                return
-        raise RuntimeError(f'Refusing to overwrite an unrecognised file at {path}')
+            existing = f.read()
+        if MARKER not in existing:
+            raise RuntimeError(f'Refusing to overwrite an unrecognised file at {path}')
+        if existing == content:
+            print(f'Already present: {path}')
+            return
+        verb = 'Updated: '
     with open(path, 'w') as f:
         f.write(content)
-    print(f'Created:  {path}')
+    print(f'{verb} {path}')
 
 
 def main():
