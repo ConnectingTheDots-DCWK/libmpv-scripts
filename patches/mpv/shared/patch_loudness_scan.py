@@ -83,12 +83,22 @@ def read_src(name):
         return f.read()
 
 
+# Every edit is checked in memory first and the files are written only at
+# the end, so an anchor that does not match leaves the tree as it was. A
+# file that already carries MARKER is left alone, so a second run changes
+# nothing.
+PENDING = []
+
+
 def apply_edits(path, edits):
     """[(label, anchor, replacement)] — every anchor must be present and
     unique; a missing anchor means bulk_analysis didn't run first (or
     its output drifted) and is a hard error."""
     with open(path) as f:
         text = f.read()
+    if MARKER in text:
+        print(f'Already patched: {path}')
+        return
     for label, anchor, replacement in edits:
         n = text.count(anchor)
         if n != 1:
@@ -97,9 +107,7 @@ def apply_edits(path, edits):
                 f'Run patch_bulk_analysis.py first / check for drift.'
             )
         text = text.replace(anchor, replacement, 1)
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f'Patched: {path}')
+    PENDING.append((path, text, 'Patched: '))
 
 
 # ─── audio/mak_scan.c (bulk-emitted engine) ──────────────────────────
@@ -353,10 +361,15 @@ def patch_meson(path):
 # ─── new files ────────────────────────────────────────────────────────
 
 def write_new_file(path, content):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
-        f.write(content)
-    print(f'Wrote:    {path}')
+    PENDING.append((path, content, 'Wrote:    '))
+
+
+def write_pending():
+    for path, text, label in PENDING:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w') as f:
+            f.write(text)
+        print(f'{label}{path}')
 
 
 def main():
@@ -372,6 +385,7 @@ def main():
     patch_mak_waveform_c(os.path.join(src, 'audio', 'mak_waveform.c'))
     patch_command_c(os.path.join(src, 'player', 'command.c'))
     patch_meson(os.path.join(src, 'meson.build'))
+    write_pending()
 
 
 if __name__ == '__main__':

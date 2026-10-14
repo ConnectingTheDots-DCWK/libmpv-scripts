@@ -202,6 +202,24 @@ SRC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        'bulk_analysis')
 
 
+# Every file is checked and edited in memory first and written only at the
+# end, so an anchor that does not match leaves the tree as it was instead
+# of half patched. A file that already carries MARKER is left alone, so a
+# second run changes nothing.
+PENDING = []
+
+
+def stage(path, text):
+    PENDING.append((path, text, 'Patched: '))
+
+
+def already(path, text):
+    if MARKER in text:
+        print(f'Already patched: {path}')
+        return True
+    return False
+
+
 def read_src(name):
     with open(os.path.join(SRC_DIR, name)) as f:
         return f.read()
@@ -245,19 +263,19 @@ LOADFILE_NOTIFY_PATCHED = (
 def patch_loadfile_c(path):
     with open(path) as f:
         text = f.read()
-    if LOADFILE_INCLUDE_PRISTINE not in text:
+    if already(path, text):
+        return
+    if text.count(LOADFILE_INCLUDE_PRISTINE) != 1:
         raise RuntimeError(
-            f'Pristine anchor (loadfile.c includes) not found in {path}.'
+            f'Pristine anchor (loadfile.c includes) not found exactly once in {path}.'
         )
-    if LOADFILE_NOTIFY_PRISTINE not in text:
+    if text.count(LOADFILE_NOTIFY_PRISTINE) != 1:
         raise RuntimeError(
-            f'Pristine anchor (FILE_LOADED notify) not found in {path}.'
+            f'Pristine anchor (FILE_LOADED notify) not found exactly once in {path}.'
         )
     text = text.replace(LOADFILE_INCLUDE_PRISTINE, LOADFILE_INCLUDE_PATCHED, 1)
     text = text.replace(LOADFILE_NOTIFY_PRISTINE, LOADFILE_NOTIFY_PATCHED, 1)
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f'Patched: {path}')
+    stage(path, text)
 
 
 # ─── player/command.c ─────────────────────────────────────────────────
@@ -299,16 +317,18 @@ COMMAND_INCLUDE_PATCHED = (
 def patch_command_c(path):
     with open(path) as f:
         text = f.read()
-    if COMMAND_INCLUDE_PRISTINE not in text:
+    if already(path, text):
+        return
+    if text.count(COMMAND_INCLUDE_PRISTINE) != 1:
         raise RuntimeError(
-            f'Pristine anchor (command.c includes) not found in {path}.'
+            f'Pristine anchor (command.c includes) not found exactly once in {path}.'
         )
-    if COMMAND_TABLE_PRISTINE not in text:
+    if text.count(COMMAND_TABLE_PRISTINE) != 1:
         raise RuntimeError(
             f'Pristine anchor (audio-bitrate property entry) not found '
             f'in {path}.'
         )
-    if COMMAND_GETTER_ANCHOR not in text:
+    if text.count(COMMAND_GETTER_ANCHOR) != 1:
         raise RuntimeError(
             f'Pristine anchor (mp_property_audio_params getter) not '
             f'found in {path}.'
@@ -317,9 +337,7 @@ def patch_command_c(path):
     text = text.replace(COMMAND_TABLE_PRISTINE, COMMAND_TABLE_PATCHED, 1)
     text = text.replace(COMMAND_GETTER_ANCHOR,
                         read_src('waveform_command_insert.c'), 1)
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f'Patched: {path}')
+    stage(path, text)
 
 
 # ─── player/main.c ────────────────────────────────────────────────────
@@ -361,6 +379,8 @@ MAIN_CREATE_PATCHED = (
 def patch_main_c(path):
     with open(path) as f:
         text = f.read()
+    if already(path, text):
+        return
     for name, anchor in (('includes', MAIN_INCLUDE_PRISTINE),
                          ('mp_destroy', MAIN_DESTROY_PRISTINE),
                          ('mp_create', MAIN_CREATE_PRISTINE)):
@@ -372,9 +392,7 @@ def patch_main_c(path):
     text = text.replace(MAIN_INCLUDE_PRISTINE, MAIN_INCLUDE_PATCHED, 1)
     text = text.replace(MAIN_DESTROY_PRISTINE, MAIN_DESTROY_PATCHED, 1)
     text = text.replace(MAIN_CREATE_PRISTINE, MAIN_CREATE_PATCHED, 1)
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f'Patched: {path}')
+    stage(path, text)
 
 
 # ─── demux/demux.c ────────────────────────────────────────────────────
@@ -520,6 +538,8 @@ DEMUX_EDITS = [
 def patch_demux_c(path):
     with open(path) as f:
         text = f.read()
+    if already(path, text):
+        return
     for label, anchor, _ in DEMUX_EDITS:
         if text.count(anchor) != 1:
             raise RuntimeError(
@@ -529,9 +549,7 @@ def patch_demux_c(path):
     for _, anchor, replacement in DEMUX_EDITS:
         text = text.replace(anchor, replacement, 1)
     text = text.rstrip('\n') + '\n' + read_src('demux_feed_insert.c')
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f'Patched: {path}')
+    stage(path, text)
 
 
 # ─── meson.build ──────────────────────────────────────────────────────
@@ -574,31 +592,36 @@ MESON_PATCHED = (
 def patch_meson(path):
     with open(path) as f:
         text = f.read()
+    if already(path, text):
+        return
     # Compose with patch_pcm_tap when it has already run.
-    if MESON_AFTER_PCM_TAP in text:
+    if text.count(MESON_AFTER_PCM_TAP) == 1:
         text = text.replace(
             MESON_AFTER_PCM_TAP, MESON_AFTER_PCM_TAP_PATCHED, 1)
-    elif MESON_PRISTINE in text:
+    elif text.count(MESON_PRISTINE) == 1:
         text = text.replace(MESON_PRISTINE, MESON_PATCHED, 1)
     else:
         raise RuntimeError(
-            f'Pristine anchor (audio/out/ao.c entry) not found in {path}.'
+            f'Pristine anchor (audio/out/ao.c entry) not found exactly once in {path}.'
         )
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f'Patched: {path}')
+    stage(path, text)
 
 
 # ─── new files ────────────────────────────────────────────────────────
 
 def write_new_file(path, content):
-    """Write a generated source file, overwriting any existing one. The
-    patcher assumes a fresh (git-restored) mpv tree, so the file normally
-    does not exist yet; on a re-run it is rewritten with the current patch."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
-        f.write(content)
-    print(f'Wrote:    {path}')
+    """Stage a generated source file, written by write_pending() over any
+    existing one. The patcher assumes a fresh mpv tree, so the file normally
+    does not exist yet; on a re-run it is refreshed with the current copy."""
+    PENDING.append((path, content, 'Wrote:    '))
+
+
+def write_pending():
+    for path, text, label in PENDING:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w') as f:
+            f.write(text)
+        print(f'{label}{path}')
 
 
 def main():
@@ -629,6 +652,7 @@ def main():
     patch_command_c(os.path.join(src, 'player', 'command.c'))
     patch_main_c(os.path.join(src, 'player', 'main.c'))
     patch_meson(os.path.join(src, 'meson.build'))
+    write_pending()
 
 
 if __name__ == '__main__':

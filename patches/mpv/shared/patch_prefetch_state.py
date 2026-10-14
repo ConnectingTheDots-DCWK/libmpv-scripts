@@ -79,6 +79,20 @@ import os
 MARKER = 'MAK_PREFETCH_STATE_PATCH_V1'
 
 
+# Every file is checked and edited in memory first and written only at the
+# end of main(), so an anchor that does not match leaves the tree as it was
+# instead of half patched.
+PENDING = []
+
+
+def write_pending():
+    for path, text, label in PENDING:
+        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+        with open(path, 'w') as f:
+            f.write(text)
+        print(f'{label}{path}')
+
+
 # ─── core.h ────────────────────────────────────────────────────────────
 
 CORE_PRISTINE = (
@@ -115,13 +129,11 @@ def patch_core_h(path):
     if MARKER in text:
         print(f'Already patched: {path}')
         return
-    if CORE_PRISTINE not in text:
+    if text.count(CORE_PRISTINE) != 1:
         raise RuntimeError(
             f'Pristine anchor not found in {path} — mpv source may have changed.'
         )
-    with open(path, 'w') as f:
-        f.write(text.replace(CORE_PRISTINE, CORE_PATCHED, 1))
-    print(f'Patched: {path}')
+    PENDING.append((path, text.replace(CORE_PRISTINE, CORE_PATCHED, 1), 'Patched: '))
 
 
 # ─── command.c ─────────────────────────────────────────────────────────
@@ -186,19 +198,17 @@ def patch_command_c(path):
     if MARKER in text:
         print(f'Already patched: {path}')
         return
-    if COMMAND_PRISTINE not in text:
+    if text.count(COMMAND_PRISTINE) != 1:
         raise RuntimeError(
             f'Pristine anchor (property table) not found in {path}.'
         )
-    if COMMAND_GETTER_ANCHOR not in text:
+    if text.count(COMMAND_GETTER_ANCHOR) != 1:
         raise RuntimeError(
             f'Pristine anchor (getter insertion point) not found in {path}.'
         )
     text = text.replace(COMMAND_PRISTINE, COMMAND_PATCHED, 1)
     text = text.replace(COMMAND_GETTER_ANCHOR, COMMAND_GETTER_INSERT, 1)
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f'Patched: {path}')
+    PENDING.append((path, text, 'Patched: '))
 
 
 # ─── loadfile.c ────────────────────────────────────────────────────────
@@ -380,13 +390,13 @@ def patch_loadfile_c(path):
     if MARKER in text:
         print(f'Already patched: {path}')
         return
-    if LOADFILE_HELPER_ANCHOR not in text:
+    if text.count(LOADFILE_HELPER_ANCHOR) != 1:
         raise RuntimeError(
             f'Pristine anchor (wakeup_demux) not found in {path}.'
         )
     text = text.replace(LOADFILE_HELPER_ANCHOR, LOADFILE_HELPER_INSERT, 1)
     for pristine, patched in LOADFILE_CALL_SITES:
-        if pristine not in text:
+        if text.count(pristine) != 1:
             raise RuntimeError(
                 f'Pristine anchor not found in {path}:\n{pristine[:120]}'
             )
@@ -394,9 +404,7 @@ def patch_loadfile_c(path):
     for pristine, patched in LOADFILE_OPTIONAL_CALL_SITES:
         if pristine in text:
             text = text.replace(pristine, patched, 1)
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f'Patched: {path}')
+    PENDING.append((path, text, 'Patched: '))
 
 
 # ─── playloop.c ────────────────────────────────────────────────────────
@@ -444,21 +452,19 @@ def patch_playloop_c(path):
     # Forward-declare the helper from loadfile.c at the point of the
     # first static definition of handle_update_cache. Using the full
     # signature as anchor ensures we inject exactly once.
-    if PLAYLOOP_PRISTINE not in text:
+    if text.count(PLAYLOOP_PRISTINE) != 1:
         raise RuntimeError(
             f'Pristine anchor (handle_update_cache) not found in {path}.'
         )
     text = text.replace(PLAYLOOP_PRISTINE, PLAYLOOP_FORWARD_DECL, 1)
-    if PLAYLOOP_READY_CALL_ANCHOR not in text:
+    if text.count(PLAYLOOP_READY_CALL_ANCHOR) != 1:
         raise RuntimeError(
             f'Pristine anchor (handle_update_cache body) not found in {path}.'
         )
     text = text.replace(
         PLAYLOOP_READY_CALL_ANCHOR, PLAYLOOP_READY_CALL_INSERT, 1
     )
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f'Patched: {path}')
+    PENDING.append((path, text, 'Patched: '))
 
 
 def main():
@@ -470,6 +476,7 @@ def main():
     patch_command_c(os.path.join(src, 'player', 'command.c'))
     patch_loadfile_c(os.path.join(src, 'player', 'loadfile.c'))
     patch_playloop_c(os.path.join(src, 'player', 'playloop.c'))
+    write_pending()
 
 
 if __name__ == '__main__':

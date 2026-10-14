@@ -92,6 +92,20 @@ import os
 MARKER = 'MAK_AUDIO_OUTPUT_STATE_PATCH_V1'
 
 
+# Every file is checked and edited in memory first and written only at the
+# end of main(), so an anchor that does not match leaves the tree as it was
+# instead of half patched.
+PENDING = []
+
+
+def write_pending():
+    for path, text, label in PENDING:
+        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+        with open(path, 'w') as f:
+            f.write(text)
+        print(f'{label}{path}')
+
+
 # ─── core.h ────────────────────────────────────────────────────────────
 
 # Anchor on the `audio_status` field — stable, directly conceptually
@@ -123,13 +137,11 @@ def patch_core_h(path):
     if MARKER in text:
         print(f'Already patched: {path}')
         return
-    if CORE_PRISTINE not in text:
+    if text.count(CORE_PRISTINE) != 1:
         raise RuntimeError(
             f'Pristine anchor not found in {path} — mpv source may have changed.'
         )
-    with open(path, 'w') as f:
-        f.write(text.replace(CORE_PRISTINE, CORE_PATCHED, 1))
-    print(f'Patched: {path}')
+    PENDING.append((path, text.replace(CORE_PRISTINE, CORE_PATCHED, 1), 'Patched: '))
 
 
 # ─── command.c ─────────────────────────────────────────────────────────
@@ -183,19 +195,17 @@ def patch_command_c(path):
     if MARKER in text:
         print(f'Already patched: {path}')
         return
-    if COMMAND_PRISTINE not in text:
+    if text.count(COMMAND_PRISTINE) != 1:
         raise RuntimeError(
             f'Pristine anchor (property table) not found in {path}.'
         )
-    if COMMAND_GETTER_ANCHOR not in text:
+    if text.count(COMMAND_GETTER_ANCHOR) != 1:
         raise RuntimeError(
             f'Pristine anchor (getter insertion point) not found in {path}.'
         )
     text = text.replace(COMMAND_PRISTINE, COMMAND_PATCHED, 1)
     text = text.replace(COMMAND_GETTER_ANCHOR, COMMAND_GETTER_INSERT, 1)
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f'Patched: {path}')
+    PENDING.append((path, text, 'Patched: '))
 
 
 # ─── audio.c ───────────────────────────────────────────────────────────
@@ -295,20 +305,18 @@ def patch_audio_c(path):
     if MARKER in text:
         print(f'Already patched: {path}')
         return
-    if AUDIO_HELPER_ANCHOR not in text:
+    if text.count(AUDIO_HELPER_ANCHOR) != 1:
         raise RuntimeError(
             f'Pristine anchor (audio.c includes) not found in {path}.'
         )
     text = text.replace(AUDIO_HELPER_ANCHOR, AUDIO_HELPER_INSERT, 1)
     for pristine, patched in AUDIO_CALL_SITES:
-        if pristine not in text:
+        if text.count(pristine) != 1:
             raise RuntimeError(
                 f'Pristine anchor not found in {path}:\n{pristine[:120]}'
             )
         text = text.replace(pristine, patched, 1)
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f'Patched: {path}')
+    PENDING.append((path, text, 'Patched: '))
 
 
 def main():
@@ -319,6 +327,7 @@ def main():
     patch_core_h(os.path.join(src, 'player', 'core.h'))
     patch_command_c(os.path.join(src, 'player', 'command.c'))
     patch_audio_c(os.path.join(src, 'player', 'audio.c'))
+    write_pending()
 
 
 if __name__ == '__main__':

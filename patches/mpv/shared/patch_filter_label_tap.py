@@ -97,6 +97,20 @@ def read_src(name):
 # patched by an older version fails in check_stale_marker instead of being
 # skipped as already patched.
 MARKER = 'MAK_TAP_PATCH_V4'
+
+
+# Every file is checked and edited in memory first and written only at the
+# end of main(), so an anchor that does not match leaves the tree as it was
+# instead of half patched.
+PENDING = []
+
+
+def write_pending():
+    for path, text, label in PENDING:
+        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+        with open(path, 'w') as f:
+            f.write(text)
+        print(f'{label}{path}')
 MARKER_RE = re.compile(r'MAK_TAP_PATCH_V\d+')
 
 # Wire-protocol limits. Keep in sync with the Dart parser.
@@ -207,16 +221,16 @@ def patch_output_chain(path):
     if MARKER in text:
         print(f'Already patched: {path}')
         return
-    if OUTPUT_CHAIN_INCLUDE_PRISTINE not in text:
+    if text.count(OUTPUT_CHAIN_INCLUDE_PRISTINE) != 1:
         raise RuntimeError(
             f'Pristine anchor (user_filters.h include) not found in {path}.'
         )
-    if USER_WRAPPER_PRE_PRISTINE not in text:
+    if text.count(USER_WRAPPER_PRE_PRISTINE) != 1:
         raise RuntimeError(
             f'Pristine anchor (user_wrapper_process PRE block) not found '
             f'in {path}.'
         )
-    if USER_WRAPPER_POST_PRISTINE not in text:
+    if text.count(USER_WRAPPER_POST_PRISTINE) != 1:
         raise RuntimeError(
             f'Pristine anchor (user_wrapper_process POST block) not '
             f'found in {path}.'
@@ -227,9 +241,7 @@ def patch_output_chain(path):
                         USER_WRAPPER_PRE_PATCHED, 1)
     text = text.replace(USER_WRAPPER_POST_PRISTINE,
                         USER_WRAPPER_POST_PATCHED, 1)
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f'Patched: {path}')
+    PENDING.append((path, text, 'Patched: '))
 
 
 # ─── player/command.c ─────────────────────────────────────────────────
@@ -340,16 +352,16 @@ def patch_command_c(path):
     if MARKER in text:
         print(f'Already patched: {path}')
         return
-    if COMMAND_INCLUDE_PRISTINE not in text:
+    if text.count(COMMAND_INCLUDE_PRISTINE) != 1:
         raise RuntimeError(
             f'Pristine anchor (command.c includes) not found in {path}.'
         )
-    if COMMAND_TABLE_PRISTINE not in text:
+    if text.count(COMMAND_TABLE_PRISTINE) != 1:
         raise RuntimeError(
             f'Pristine anchor (audio-bitrate property entry) not found '
             f'in {path}.'
         )
-    if COMMAND_GETTER_ANCHOR not in text:
+    if text.count(COMMAND_GETTER_ANCHOR) != 1:
         raise RuntimeError(
             f'Pristine anchor (mp_property_audio_params getter) not '
             f'found in {path}.'
@@ -357,9 +369,7 @@ def patch_command_c(path):
     text = text.replace(COMMAND_INCLUDE_PRISTINE, COMMAND_INCLUDE_PATCHED, 1)
     text = text.replace(COMMAND_TABLE_PRISTINE, COMMAND_TABLE_PATCHED, 1)
     text = text.replace(COMMAND_GETTER_ANCHOR, COMMAND_GETTER_INSERT, 1)
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f'Patched: {path}')
+    PENDING.append((path, text, 'Patched: '))
 
 
 # ─── meson.build ──────────────────────────────────────────────────────
@@ -443,9 +453,7 @@ def patch_meson(path):
         raise RuntimeError(
             f'Pristine anchor (audio/out/ao.c entry) not found in {path}.'
         )
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f'Patched: {path}')
+    PENDING.append((path, text, 'Patched: '))
 
 
 # ─── new files ────────────────────────────────────────────────────────
@@ -461,9 +469,7 @@ def write_new_file(path, content):
             f'Refusing to overwrite an unrecognised file at {path}'
         )
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
-        f.write(content)
-    print(f'Created:  {path}')
+    PENDING.append((path, content, 'Created:  '))
 
 
 def check_stale_marker(paths):
@@ -498,6 +504,7 @@ def main():
     patch_output_chain(os.path.join(src, 'filters', 'f_output_chain.c'))
     patch_command_c(os.path.join(src, 'player', 'command.c'))
     patch_meson(os.path.join(src, 'meson.build'))
+    write_pending()
 
 
 if __name__ == '__main__':

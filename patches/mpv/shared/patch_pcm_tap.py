@@ -127,6 +127,20 @@ def read_src(name):
 MARKER = 'MAK_PCM_TAP_PATCH_V1'
 
 
+# Every file is checked and edited in memory first and written only at the
+# end of main(), so an anchor that does not match leaves the tree as it was
+# instead of half patched.
+PENDING = []
+
+
+def write_pending():
+    for path, text, label in PENDING:
+        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+        with open(path, 'w') as f:
+            f.write(text)
+        print(f'{label}{path}')
+
+
 # ─── audio/out/mak_pcm_tap.h ──────────────────────────────────────────
 
 # The real C source lives in pcm_tap/mak_pcm_tap.h next to this
@@ -188,19 +202,17 @@ def patch_ao_c(path):
     if MARKER in text:
         print(f'Already patched: {path}')
         return
-    if AO_INCLUDE_PRISTINE not in text:
+    if text.count(AO_INCLUDE_PRISTINE) != 1:
         raise RuntimeError(
             f'Pristine anchor (ao.c includes) not found in {path}.'
         )
-    if AO_PRISTINE not in text:
+    if text.count(AO_PRISTINE) != 1:
         raise RuntimeError(
             f'Pristine anchor (ao_post_process_data body) not found in {path}.'
         )
     text = text.replace(AO_INCLUDE_PRISTINE, AO_INCLUDE_PATCHED, 1)
     text = text.replace(AO_PRISTINE, AO_PATCHED, 1)
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f'Patched: {path}')
+    PENDING.append((path, text, 'Patched: '))
 
 
 # ─── player/command.c ─────────────────────────────────────────────────
@@ -281,16 +293,16 @@ def patch_command_c(path):
     if MARKER in text:
         print(f'Already patched: {path}')
         return
-    if COMMAND_INCLUDE_PRISTINE not in text:
+    if text.count(COMMAND_INCLUDE_PRISTINE) != 1:
         raise RuntimeError(
             f'Pristine anchor (command.c includes) not found in {path}.'
         )
-    if COMMAND_TABLE_PRISTINE not in text:
+    if text.count(COMMAND_TABLE_PRISTINE) != 1:
         raise RuntimeError(
             f'Pristine anchor (audio-bitrate property entry) not found '
             f'in {path}.'
         )
-    if COMMAND_GETTER_ANCHOR not in text:
+    if text.count(COMMAND_GETTER_ANCHOR) != 1:
         raise RuntimeError(
             f'Pristine anchor (mp_property_audio_params getter) not '
             f'found in {path}.'
@@ -303,9 +315,7 @@ def patch_command_c(path):
     text = text.replace(COMMAND_INCLUDE_PRISTINE, COMMAND_INCLUDE_PATCHED, 1)
     text = text.replace(COMMAND_TABLE_PRISTINE, COMMAND_TABLE_PATCHED, 1)
     text = text.replace(COMMAND_GETTER_ANCHOR, COMMAND_GETTER_INSERT, 1)
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f'Patched: {path}')
+    PENDING.append((path, text, 'Patched: '))
 
 
 # ─── meson.build ──────────────────────────────────────────────────────
@@ -327,14 +337,12 @@ def patch_meson(path):
     if MARKER in text:
         print(f'Already patched: {path}')
         return
-    if MESON_PRISTINE not in text:
+    if text.count(MESON_PRISTINE) != 1:
         raise RuntimeError(
             f'Pristine anchor (audio/out/ao.c entry) not found in {path}.'
         )
     text = text.replace(MESON_PRISTINE, MESON_PATCHED, 1)
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f'Patched: {path}')
+    PENDING.append((path, text, 'Patched: '))
 
 
 # ─── new files ────────────────────────────────────────────────────────
@@ -352,9 +360,7 @@ def write_new_file(path, content):
             f'Refusing to overwrite an unrecognised file at {path}'
         )
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
-        f.write(content)
-    print(f'Created:  {path}')
+    PENDING.append((path, content, 'Created:  '))
 
 
 def main():
@@ -369,6 +375,7 @@ def main():
     patch_ao_c(os.path.join(src, 'audio', 'out', 'ao.c'))
     patch_command_c(os.path.join(src, 'player', 'command.c'))
     patch_meson(os.path.join(src, 'meson.build'))
+    write_pending()
 
 
 if __name__ == '__main__':

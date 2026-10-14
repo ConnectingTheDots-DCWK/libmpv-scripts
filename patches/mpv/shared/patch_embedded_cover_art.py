@@ -70,6 +70,20 @@ import os
 MARKER = 'MAK_EMBEDDED_COVER_ART_PATCH_V1'
 
 
+# Every file is checked and edited in memory first and written only at the
+# end of main(), so an anchor that does not match leaves the tree as it was
+# instead of half patched.
+PENDING = []
+
+
+def write_pending():
+    for path, text, label in PENDING:
+        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+        with open(path, 'w') as f:
+            f.write(text)
+        print(f'{label}{path}')
+
+
 # ─── command.c ─────────────────────────────────────────────────────────
 
 # Insert the property registrations right after `audio-device-list`. We
@@ -205,19 +219,17 @@ def patch_command_c(path):
     if MARKER in text:
         print(f'Already patched: {path}')
         return
-    if TABLE_PRISTINE not in text:
+    if text.count(TABLE_PRISTINE) != 1:
         raise RuntimeError(
             f'Pristine anchor (property table) not found in {path}.'
         )
-    if GETTER_ANCHOR not in text:
+    if text.count(GETTER_ANCHOR) != 1:
         raise RuntimeError(
             f'Pristine anchor (getter insertion point) not found in {path}.'
         )
     text = text.replace(TABLE_PRISTINE, TABLE_PATCHED, 1)
     text = text.replace(GETTER_ANCHOR, GETTER_INSERT, 1)
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f'Patched: {path}')
+    PENDING.append((path, text, 'Patched: '))
 
 
 # ─── loadfile.c ────────────────────────────────────────────────────────
@@ -248,15 +260,13 @@ def patch_loadfile_c(path):
     if MARKER in text:
         print(f'Already patched: {path}')
         return
-    if LOADFILE_PRISTINE not in text:
+    if text.count(LOADFILE_PRISTINE) != 1:
         raise RuntimeError(
             f'Pristine anchor (MPV_EVENT_FILE_LOADED notify) not found in '
             f'{path}.'
         )
     text = text.replace(LOADFILE_PRISTINE, LOADFILE_PATCHED, 1)
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f'Patched: {path}')
+    PENDING.append((path, text, 'Patched: '))
 
 
 def main():
@@ -266,6 +276,7 @@ def main():
     src = sys.argv[1]
     patch_command_c(os.path.join(src, 'player', 'command.c'))
     patch_loadfile_c(os.path.join(src, 'player', 'loadfile.c'))
+    write_pending()
 
 
 if __name__ == '__main__':
