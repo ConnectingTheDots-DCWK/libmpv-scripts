@@ -1,4 +1,4 @@
-## [0.2.1] - Unreleased
+## [0.2.1] - 15-10-2026
 
 ### Fixed
 - A `playlist-remove` or `playlist-clear` sent from an `on_load` hook during the playlist prefetch no longer reads the freed entry: the prefetch keeps it until the hook returns and skips it when it was removed (`patch_prefetch_hook.py`).
