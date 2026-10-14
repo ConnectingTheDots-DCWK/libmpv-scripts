@@ -561,16 +561,14 @@ apply_ffmpeg_patches() {
   # no-op when --enable-small is off. Structural fidelity fix — not user-gated.
   python3 "$LIBMPV_SCRIPTS_ROOT/patches/ffmpeg/patch_ffmpeg_codec_longnames.py" "$ffmpeg_dir"
 
-  # libsmb2 patch (toggleable): gated by presence of the dropped-in file so we
-  # don't retry the copy on every rebuild. Not fully idempotent (drops a new
-  # .c file + edits configure/Makefile), so only on fresh extracts. When the
-  # user disables it, ffmpeg_common_args also omits --enable-libsmb2.
+  # libsmb2 patch (toggleable): copies libavformat/libsmb2.c and edits
+  # configure, Makefile and protocols.c. Idempotent, and every platform
+  # extracts a fresh FFmpeg tree, so it runs on every build. When the user
+  # disables it, ffmpeg_common_args also omits --enable-libsmb2.
   if patch_on libsmb2; then
-    if [[ ! -f "$ffmpeg_dir/libavformat/libsmb2.c" ]]; then
-      log "Patching FFmpeg for libsmb2 support..."
-      python3 "$LIBMPV_SCRIPTS_ROOT/patches/ffmpeg/patch_ffmpeg_libsmb2.py" \
-        "$ffmpeg_dir" "$LIBMPV_SCRIPTS_ROOT/patches/ffmpeg/libsmb2.c"
-    fi
+    log "Patching FFmpeg for libsmb2 support..."
+    python3 "$LIBMPV_SCRIPTS_ROOT/patches/ffmpeg/patch_ffmpeg_libsmb2.py" \
+      "$ffmpeg_dir" "$LIBMPV_SCRIPTS_ROOT/patches/ffmpeg/libsmb2.c"
   else
     warn "Skipping disabled patch: libsmb2"
   fi

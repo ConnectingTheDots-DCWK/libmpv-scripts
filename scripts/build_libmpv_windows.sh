@@ -590,6 +590,10 @@ fi
 if [[ ! -f "$DIST/lib/libavcodec.a" ]]; then
   log "Building FFmpeg $FFMPEG_VERSION..."
   FF=$(fetch ffmpeg "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz")
+  # A pristine tree on every build: tar over an old tree keeps files the
+  # tarball does not have (libavformat/libsmb2.c), and the patches assume
+  # an unpatched tree.
+  rm -rf "$SRC/ffmpeg-$FFMPEG_VERSION"
   tar -xf "$FF" -C "$SRC"
   apply_ffmpeg_patches "$SRC/ffmpeg-$FFMPEG_VERSION"
   pushd "$SRC/ffmpeg-$FFMPEG_VERSION"

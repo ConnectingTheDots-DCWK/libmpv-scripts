@@ -611,6 +611,9 @@ build_ffmpeg() {
   log "Build ffmpeg $FFMPEG_VERSION..."
   local src="$BUILD_DIR/src/ffmpeg-$FFMPEG_VERSION.tar.gz"
   download "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.gz" "$src"
+  # A pristine tree on every build: src/ survives cleanup_build, and a
+  # reused tree would keep the result of older patches.
+  rm -rf "$BUILD_DIR/src/ffmpeg-$FFMPEG_VERSION"
   local dir; dir="$(extract "$src" "$BUILD_DIR/src")"
 
   apply_ffmpeg_patches "$dir"
