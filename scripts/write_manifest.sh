@@ -17,6 +17,9 @@
 #                  turns into its typed effects API
 #   assets         SHA-256 of every binary in builds/release/, keyed by name
 #
+# It also writes builds/release/SHA256SUMS, the same hashes in the
+# `sha256sum -c` format, published next to the binaries.
+#
 # Usage (from the repo root): scripts/write_manifest.sh
 # RELEASE_DIR overrides the directory it reads and writes.
 # =============================================================================
@@ -52,4 +55,7 @@ manifest = {
 out = release_dir / "manifest.json"
 out.write_text(json.dumps(manifest, indent=2) + "\n")
 print(f"Wrote {out} ({len(assets)} assets, {len(manifest['audioFilters'])} filters)")
+sums = release_dir / "SHA256SUMS"
+sums.write_text("".join(f"{h}  {n}\n" for n, h in assets.items()))
+print(f"Wrote {sums}")
 PY
