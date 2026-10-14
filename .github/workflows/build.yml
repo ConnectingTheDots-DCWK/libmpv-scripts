@@ -19,6 +19,11 @@ concurrency:
 env:
   STRICT_SOURCES: '1'
 
+# The jobs only read the repository. The artifacts and the build cache use
+# the runner's own token, not GITHUB_TOKEN.
+permissions:
+  contents: read
+
 jobs:
   linux:
     name: Linux ${{ matrix.arch }}
@@ -33,15 +38,25 @@ jobs:
           - arch: aarch64
             os: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
-      - run: docker build --target linux -t mpv-build-linux docker/
+      - uses: actions/checkout@v7
+      # Buildx with the GitHub Actions cache: an unchanged Dockerfile
+      # restores the image layers instead of rebuilding them.
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: docker/
+          target: linux
+          tags: mpv-build-linux
+          load: true
+          cache-from: type=gha,scope=linux-${{ matrix.arch }}
+          cache-to: type=gha,scope=linux-${{ matrix.arch }},mode=max
       - name: Build
         run: |
           docker run --rm \
             -e STRICT_SOURCES -e RECORD_SOURCES=/scripts/builds/sources-linux-${{ matrix.arch }}.txt \
             -v "$PWD:/scripts" -w /scripts \
             mpv-build-linux bash scripts/build_libmpv_linux.sh --arch=${{ matrix.arch }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-${{ matrix.arch }}
           path: |
@@ -49,7 +64,7 @@ jobs:
           if-no-files-found: error
       # A build stopped by an unpinned source leaves the hash to pin here.
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unpinned-sources-linux-${{ matrix.arch }}
           path: builds/sources-*.txt
@@ -59,8 +74,19 @@ jobs:
     name: Android
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - run: docker build --platform linux/amd64 --target android -t mpv-build-android docker/
+      - uses: actions/checkout@v7
+      # Buildx with the GitHub Actions cache: an unchanged Dockerfile
+      # restores the image layers instead of rebuilding them.
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: docker/
+          target: android
+          tags: mpv-build-android
+          platforms: linux/amd64
+          load: true
+          cache-from: type=gha,scope=android
+          cache-to: type=gha,scope=android,mode=max
       - name: Build
         run: |
           docker run --rm --platform linux/amd64 \
@@ -68,7 +94,7 @@ jobs:
             -e STRICT_SOURCES -e RECORD_SOURCES=/scripts/builds/sources-android.txt \
             -v "$PWD:/scripts" -w /scripts \
             mpv-build-android bash scripts/build_libmpv_android.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: android
           path: |
@@ -76,7 +102,7 @@ jobs:
           if-no-files-found: error
       # A build stopped by an unpinned source leaves the hash to pin here.
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unpinned-sources-android
           path: builds/sources-*.txt
@@ -90,15 +116,25 @@ jobs:
       matrix:
         arch: [x86_64, aarch64]
     steps:
-      - uses: actions/checkout@v4
-      - run: docker build --target windows -t mpv-build-windows docker/
+      - uses: actions/checkout@v7
+      # Buildx with the GitHub Actions cache: an unchanged Dockerfile
+      # restores the image layers instead of rebuilding them.
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: docker/
+          target: windows
+          tags: mpv-build-windows
+          load: true
+          cache-from: type=gha,scope=windows
+          cache-to: type=gha,scope=windows,mode=max
       - name: Build
         run: |
           docker run --rm \
             -e STRICT_SOURCES -e RECORD_SOURCES=/scripts/builds/sources-windows-${{ matrix.arch }}.txt \
             -v "$PWD:/scripts" -w /scripts \
             mpv-build-windows bash scripts/build_libmpv_windows.sh --arch=${{ matrix.arch }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-${{ matrix.arch }}
           path: |
@@ -106,7 +142,7 @@ jobs:
           if-no-files-found: error
       # A build stopped by an unpinned source leaves the hash to pin here.
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unpinned-sources-windows-${{ matrix.arch }}
           path: builds/sources-*.txt
@@ -126,20 +162,20 @@ jobs:
             script: scripts/build_libmpv_ios.sh
             output: builds/release/libmpv_ios.xcframework.zip
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: brew install meson ninja nasm cmake pkg-config autoconf automake libtool
       - name: Build
         env:
           RECORD_SOURCES: ${{ github.workspace }}/builds/sources-${{ matrix.name }}.txt
         run: bash ${{ matrix.script }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}
           path: ${{ matrix.output }}
           if-no-files-found: error
       # A build stopped by an unpinned source leaves the hash to pin here.
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unpinned-sources-${{ matrix.name }}
           path: builds/sources-*.txt
@@ -150,8 +186,8 @@ jobs:
     needs: [linux, android, windows, apple]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
       - name: Assemble builds/release
@@ -160,7 +196,7 @@ jobs:
           find artifacts -type f -name 'libmpv_*' -exec cp {} builds/release/ \;
           scripts/write_manifest.sh
           ls -la builds/release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: libmpv-release
           path: builds/release/
@@ -171,12 +207,22 @@ jobs:
     needs: release
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: libmpv-release
           path: builds/release
-      - run: docker build --target verify -t mpv-build-verify docker/
+      # Buildx with the GitHub Actions cache: an unchanged Dockerfile
+      # restores the image layers instead of rebuilding them.
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: docker/
+          target: verify
+          tags: mpv-build-verify
+          load: true
+          cache-from: type=gha,scope=verify
+          cache-to: type=gha,scope=verify,mode=max
       # The runner's NDK sysroot backs the Android symbol check. Apple
       # binaries get the static checks only, and the aarch64 DLL no load test.
       - name: Verify
@@ -199,8 +245,8 @@ jobs:
     needs: linux
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: linux-x86_64
           path: builds/release
