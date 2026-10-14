@@ -195,6 +195,10 @@ WORKDIR /src
 FROM base AS windows
 
 ARG LLVM_MINGW_VERSION=20260421
+# sha256 of the release assets, as GitHub lists them for the release. Bump
+# with LLVM_MINGW_VERSION.
+ARG LLVM_MINGW_SHA256_X86_64=f8b8cce779affeab47bcaec6ce6e9e768b166094a366123ef64b2d0b389cc121
+ARG LLVM_MINGW_SHA256_AARCH64=e9cfa5a93290cb852dc5a6b90ccde255403a63332648be171470ca3c1ad37828
 ENV LLVM_MINGW_DIR=/opt/llvm-mingw
 # llvm-mingw is intentionally NOT prepended to PATH: its tarball ships
 # x86_64-w64-mingw32-* shadow wrappers that would override the GNU MinGW-w64
@@ -213,13 +217,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN set -eux; \
     HOST_ARCH="$(dpkg --print-architecture)"; \
     case "$HOST_ARCH" in \
-      arm64) LLVM_TARBALL_ARCH="aarch64" ;; \
-      amd64) LLVM_TARBALL_ARCH="x86_64"  ;; \
+      arm64) LLVM_TARBALL_ARCH="aarch64"; SHA="$LLVM_MINGW_SHA256_AARCH64" ;; \
+      amd64) LLVM_TARBALL_ARCH="x86_64";  SHA="$LLVM_MINGW_SHA256_X86_64" ;; \
       *) echo "unsupported host arch: $HOST_ARCH" >&2; exit 1 ;; \
     esac; \
     URL="https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-22.04-${LLVM_TARBALL_ARCH}.tar.xz"; \
     mkdir -p "$LLVM_MINGW_DIR"; \
-    curl -fsSL "$URL" | tar -xJ --strip-components=1 -C "$LLVM_MINGW_DIR"; \
+    curl -fsSL --retry 3 -o /tmp/llvm-mingw.tar.xz "$URL"; \
+    echo "$SHA  /tmp/llvm-mingw.tar.xz" | sha256sum -c -; \
+    tar -xJf /tmp/llvm-mingw.tar.xz --strip-components=1 -C "$LLVM_MINGW_DIR"; \
+    rm -f /tmp/llvm-mingw.tar.xz; \
     "${LLVM_MINGW_DIR}/bin/aarch64-w64-mingw32-clang" --version
 
 WORKDIR /src
@@ -253,6 +260,10 @@ WORKDIR /src
 FROM linux-noble AS verify
 
 ARG LLVM_MINGW_VERSION=20260421
+# sha256 of the release assets, as GitHub lists them for the release. Bump
+# with LLVM_MINGW_VERSION.
+ARG LLVM_MINGW_SHA256_X86_64=f8b8cce779affeab47bcaec6ce6e9e768b166094a366123ef64b2d0b389cc121
+ARG LLVM_MINGW_SHA256_AARCH64=e9cfa5a93290cb852dc5a6b90ccde255403a63332648be171470ca3c1ad37828
 ENV LLVM_MINGW_DIR=/opt/llvm-mingw
 
 # Windows cross — GNU MinGW (x86_64) + llvm-mingw (aarch64) for the LoadLibrary
@@ -264,13 +275,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN set -eux; \
     HOST_ARCH="$(dpkg --print-architecture)"; \
     case "$HOST_ARCH" in \
-      arm64) LLVM_TARBALL_ARCH="aarch64" ;; \
-      amd64) LLVM_TARBALL_ARCH="x86_64"  ;; \
+      arm64) LLVM_TARBALL_ARCH="aarch64"; SHA="$LLVM_MINGW_SHA256_AARCH64" ;; \
+      amd64) LLVM_TARBALL_ARCH="x86_64";  SHA="$LLVM_MINGW_SHA256_X86_64" ;; \
       *) echo "unsupported host arch: $HOST_ARCH" >&2; exit 1 ;; \
     esac; \
     URL="https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-22.04-${LLVM_TARBALL_ARCH}.tar.xz"; \
     mkdir -p "$LLVM_MINGW_DIR"; \
-    curl -fsSL "$URL" | tar -xJ --strip-components=1 -C "$LLVM_MINGW_DIR"; \
+    curl -fsSL --retry 3 -o /tmp/llvm-mingw.tar.xz "$URL"; \
+    echo "$SHA  /tmp/llvm-mingw.tar.xz" | sha256sum -c -; \
+    tar -xJf /tmp/llvm-mingw.tar.xz --strip-components=1 -C "$LLVM_MINGW_DIR"; \
+    rm -f /tmp/llvm-mingw.tar.xz; \
     "${LLVM_MINGW_DIR}/bin/aarch64-w64-mingw32-clang" --version
 
 # ── Cross-arch + Windows runtime tools ────────────────────────────────────────
@@ -305,6 +319,8 @@ RUN set -eux; \
 # between releases — bump consciously and re-verify against
 # https://github.com/AndreRH/hangover/releases
 ENV HANGOVER_VERSION=11.9
+# sha256 of the arm64 noble tarball as GitHub lists it. Bump with the version.
+ARG HANGOVER_SHA256=0c66e48800c03d32c3c22029b5053cef3d61376aedcf44eaddf82dce63e410dd
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     apt-get update; \
@@ -312,6 +328,7 @@ RUN set -eux; \
       cd /tmp; \
       curl -fsSL -o hangover.tar \
         "https://github.com/AndreRH/hangover/releases/download/hangover-${HANGOVER_VERSION}/hangover_${HANGOVER_VERSION}_ubuntu2404_noble_arm64.tar"; \
+      echo "$HANGOVER_SHA256  hangover.tar" | sha256sum -c -; \
       mkdir hangover && tar xf hangover.tar -C hangover; \
       apt-get install -y --no-install-recommends \
         ./hangover/hangover-wine_*.deb \

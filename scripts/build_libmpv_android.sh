@@ -153,6 +153,23 @@ find_or_download_ndk() {
   # arm64 and x86_64 binaries, with arm64 picked automatically on Apple Silicon.
   local url="https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-${host_tag}.zip"
   curl -fsSL --retry 3 -o "$ndk_dir/ndk.zip" "$url" || fail "NDK download failed"
+  # Google publishes only a SHA-1 for the NDK zips (repository2-3.xml and the
+  # NDK downloads page), so the check is against that. Bump with NDK_VERSION.
+  local want_sha1 got_sha1
+  case "${NDK_VERSION}-${host_tag}" in
+    r28c-linux)  want_sha1="a7b54a5de87fecd125a17d54f73c446199e72a64" ;;
+    r28c-darwin) want_sha1="fc20a6bf15a30fb3428c9b60a7308793a362dc6d" ;;
+    *) fail "No pinned SHA-1 for NDK ${NDK_VERSION} (${host_tag})" ;;
+  esac
+  if command -v sha1sum >/dev/null 2>&1; then
+    got_sha1="$(sha1sum "$ndk_dir/ndk.zip" | cut -d' ' -f1)"
+  else
+    got_sha1="$(shasum -a 1 "$ndk_dir/ndk.zip" | cut -d' ' -f1)"
+  fi
+  if [[ "$got_sha1" != "$want_sha1" ]]; then
+    rm -f "$ndk_dir/ndk.zip"
+    fail "NDK SHA-1 mismatch: got $got_sha1, expected $want_sha1"
+  fi
   # Clean any partial/previous extract first, then extract non-interactively
   # (-o). A leftover tree makes plain `unzip` prompt "replace? [y]es,[n]o,…",
   # and with no TTY in the container it reads EOF and aborts mid-extract,
