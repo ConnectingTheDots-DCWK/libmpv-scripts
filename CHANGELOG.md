@@ -1,3 +1,22 @@
+## [0.2.1] - Unreleased
+
+### Fixed
+- A `playlist-remove` or `playlist-clear` sent from an `on_load` hook during the playlist prefetch no longer reads the freed entry: the prefetch keeps it until the hook returns and skips it when it was removed (`patch_prefetch_hook.py`).
+- Two players tapping the same filter label no longer write one ring from two threads, which could write past its buffer. The tap writers share a lock that a single player never waits on.
+- The tap and the progressive waveform keep every sample of a frame larger than 8192 floats, such as a FLAC block of 4608 stereo samples, so the tap PTS no longer drifts.
+- Turning `waveform-enabled` off during a loudness scan no longer leaves `loudness-scan-data` on `scanning`: the scan restarts on its own.
+- After a stop or a skip the cache-fed analysis stops decoding the old file and ends as `failed`, instead of leaving the waveform on `progressive` and the loudness on `scanning`.
+- The SMB timeout is read in microseconds, as mpv passes it, so `network-timeout` applies to SMB too.
+
+### Build
+- Every mpv patch checks all its anchors before writing a file, and runs a second time without effect.
+- Every build extracts a fresh FFmpeg tree. A second Windows build no longer fails on `--enable-libsmb2`.
+- `filter_label_tap` builds without `bulk_analysis`, and the build warns when `bulk_analysis` runs without it.
+- libiconv falls back to two GNU mirrors, checked against the same pin.
+- The NDK, llvm-mingw and Hangover downloads are checked against their published hashes.
+- CI uses the Node 24 actions, caches the Docker images and runs with a read-only token.
+- `write_manifest.sh` also writes `SHA256SUMS`.
+
 ## [0.2.0] - 14-10-2026
 
 ### Breaking
