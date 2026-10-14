@@ -155,8 +155,11 @@ static av_cold int libsmb2_connect(URLContext *h, struct smb2_url **out_url)
         return AVERROR(ENOMEM);
     }
 
+    /* "timeout" is in microseconds, as for tcp and http (mpv passes
+     * network-timeout * 1e6); libsmb2 counts whole seconds. */
     if (ctx->timeout > 0)
-        smb2_set_timeout(ctx->smb2, ctx->timeout);
+        smb2_set_timeout(ctx->smb2,
+                         (int)(((int64_t)ctx->timeout + 999999) / 1000000));
 
     /* Force NTLM authentication — GSSAPI/Kerberos fails in sandboxed apps */
     smb2_set_authentication(ctx->smb2, 1); /* 1 = SMB2_SEC_NTLMSSP */
@@ -412,7 +415,7 @@ static int libsmb2_close_dir(URLContext *h)
 #define D AV_OPT_FLAG_DECODING_PARAM
 #define E AV_OPT_FLAG_ENCODING_PARAM
 static const AVOption options[] = {
-    {"timeout",  "set timeout in ms of socket I/O operations", OFFSET(timeout),  AV_OPT_TYPE_INT,    {.i64 = 0}, 0, INT_MAX, D|E },
+    {"timeout",  "set timeout in microseconds of socket I/O operations", OFFSET(timeout),  AV_OPT_TYPE_INT,    {.i64 = 0}, 0, INT_MAX, D|E },
     {"password", "set SMB2 password",                          OFFSET(password), AV_OPT_TYPE_STRING, {0},        0, 0,       D|E },
     {NULL}
 };
