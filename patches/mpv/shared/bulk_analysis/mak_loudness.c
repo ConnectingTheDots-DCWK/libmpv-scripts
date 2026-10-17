@@ -430,17 +430,23 @@ static struct {
  * zero.) */
 static mp_mutex g_loud_lock = MP_STATIC_MUTEX_INITIALIZER;
 
+/* The flag and the generation are checked under the lock, as publish does.
+ * The core marks a new generation (mark_scanning, or unavailable from the
+ * arm calls) right after bumping it, under this lock: a thread of an older
+ * generation then either writes first, and is overwritten, or sees the new
+ * generation and writes nothing. Checked before the lock, its stale FAILED
+ * could land after the new SCANNING. */
 static void loud_set_state(int gen, enum mak_loud_state s)
 {
-    if (!atomic_load(&g_loud_enabled)) return;
-    if (gen != mak_waveform_current_gen()) return;
     mp_mutex_lock(&g_loud_lock);
-    g_loud.state = s;
-    g_loud.integrated_lufs = 0;
-    g_loud.lra_lu = 0;
-    g_loud.sample_peak = 0;
-    g_loud.true_peak = 0;
-    g_loud.gated_block_count = 0;
+    if (atomic_load(&g_loud_enabled) && gen == mak_waveform_current_gen()) {
+        g_loud.state = s;
+        g_loud.integrated_lufs = 0;
+        g_loud.lra_lu = 0;
+        g_loud.sample_peak = 0;
+        g_loud.true_peak = 0;
+        g_loud.gated_block_count = 0;
+    }
     mp_mutex_unlock(&g_loud_lock);
 }
 
