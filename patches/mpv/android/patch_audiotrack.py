@@ -30,6 +30,15 @@ blocking write, which paces the loop while there is audio.
    starts it with play() and fresh counters, and audio-output-state goes
    through initializing again.
 
+3. Pause. The driver had no set_pause, so buffer.c paused it with reset,
+   which pauses and flushes the track: every pause threw away what the
+   track held (75 to 150 ms, sometimes more) and the rest of the chunk in
+   writing, since the pause cuts the blocking write short. A resume
+   skipped that audio, and the position jumped ahead by as much. set_pause
+   now pauses and plays the track without a flush, and the thread keeps
+   the rest of a cut chunk and writes it first on the resume. A reset in
+   between (a seek or a stop) drops it.
+
 Each fix has its own marker and runs once. All anchors are checked before
 the file is written, so a mismatch leaves the tree as it was.
 
@@ -152,6 +161,98 @@ edit(DEAD, [
         "                MP_WARN(ao, \"AudioTrack.write failed with ERROR_DEAD_OBJECT. Reloading the audio output...\\n\");\n"
         "                p->mak_dead_object = true;\n"
         "                ao_request_reload(ao);\n",
+    ),
+])
+
+# ── 3. Pause: set_pause without a flush, the cut chunk kept ─────────────────
+PAUSE = "MAK_AUDIOTRACK_PAUSE_PATCH_V1"
+edit(PAUSE, [
+    (
+        "    void *chunk;\n"
+        "    int chunksize;\n",
+        "    void *chunk;\n"
+        "    int chunksize;\n"
+        f"    // {PAUSE}: bytes at the start of chunk that a\n"
+        "    // pause cut short, and the reset count they belong to\n"
+        "    int mak_pending;\n"
+        "    int mak_pending_gen;\n"
+        "    atomic_int mak_reset_gen;\n",
+    ),
+    (
+        "            int len = mak_read_chunk(ao);\n"
+        "            if (!len) {\n",
+        f"            // {PAUSE}:\n"
+        "            // the rest of a chunk that a pause cut short goes first,\n"
+        "            // unless a reset (a seek or a stop) came since.\n"
+        "            int len = p->mak_pending;\n"
+        "            p->mak_pending = 0;\n"
+        "            if (len && p->mak_pending_gen != atomic_load(&p->mak_reset_gen))\n"
+        "                len = 0;\n"
+        "            if (!len) {\n"
+        "                p->mak_pending_gen = atomic_load(&p->mak_reset_gen);\n"
+        "                len = mak_read_chunk(ao);\n"
+        "            }\n"
+        "            if (!len) {\n",
+    ),
+    (
+        "                p->written_frames += ret / ao->sstride;\n",
+        "                p->written_frames += ret / ao->sstride;\n"
+        f"                // {PAUSE}: a pause cuts the\n"
+        "                // blocking write short; the rest waits for the resume.\n"
+        "                if (ret < len) {\n"
+        "                    memmove(p->chunk, (char *)p->chunk + ret, len - ret);\n"
+        "                    p->mak_pending = len - ret;\n"
+        "                }\n",
+    ),
+    (
+        "    p->timestamp_fetched = 0;\n"
+        "    p->timestamp_set = false;\n"
+        "}\n"
+        "\n"
+        "static void start(struct ao *ao)\n",
+        "    p->timestamp_fetched = 0;\n"
+        "    p->timestamp_set = false;\n"
+        f"    // {PAUSE}: drop the rest of a cut chunk\n"
+        "    atomic_fetch_add(&p->mak_reset_gen, 1);\n"
+        "}\n"
+        "\n"
+        "static void start(struct ao *ao)\n",
+    ),
+    (
+        "#define OPT_BASE_STRUCT struct priv\n",
+        f"/* {PAUSE}:\n"
+        " * pause and resume without a flush. Without set_pause, buffer.c paused\n"
+        " * this pull output with reset (stop), which flushed what the track held.\n"
+        " * No p->lock: the thread holds it while it writes. */\n"
+        "static bool set_pause(struct ao *ao, bool paused)\n"
+        "{\n"
+        "    struct priv *p = ao->priv;\n"
+        "    if (!p->audiotrack)\n"
+        "        return false;\n"
+        "\n"
+        "    JNIEnv *env = MP_JNI_GET_ENV(ao);\n"
+        "    if (paused) {\n"
+        "        MP_JNI_CALL_VOID(p->audiotrack, AudioTrack.pause);\n"
+        "        MP_JNI_EXCEPTION_LOG(ao);\n"
+        "        return true;\n"
+        "    }\n"
+        "    // A timestamp from before the pause would put the head past it.\n"
+        "    p->timestamp_fetched = 0;\n"
+        "    p->timestamp_set = false;\n"
+        "    MP_JNI_CALL_VOID(p->audiotrack, AudioTrack.play);\n"
+        "    MP_JNI_EXCEPTION_LOG(ao);\n"
+        "    mp_cond_signal(&p->wakeup);\n"
+        "    return true;\n"
+        "}\n"
+        "\n"
+        "#define OPT_BASE_STRUCT struct priv\n",
+    ),
+    (
+        "    .reset     = stop,\n"
+        "    .start     = start,\n",
+        "    .reset     = stop,\n"
+        "    .start     = start,\n"
+        "    .set_pause = set_pause,\n",
     ),
 ])
 
