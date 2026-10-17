@@ -151,9 +151,13 @@ jobs:
           path: builds/sources-*.txt
           if-no-files-found: ignore
 
+  # The image is pinned, so a new macos-latest does not change the
+  # toolchain of a release without a commit. Xcode and the brew tools still
+  # follow the updates within the label: the Toolchain versions step logs
+  # what each build used, and cannot fail the job.
   apple:
     name: ${{ matrix.name }}
-    runs-on: macos-latest
+    runs-on: macos-26
     strategy:
       fail-fast: false
       matrix:
@@ -167,6 +171,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: brew install meson ninja nasm cmake pkg-config autoconf automake libtool
+      - name: Toolchain versions
+        continue-on-error: true
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcode-select -p
+          for sdk in macosx iphoneos iphonesimulator; do
+            echo "$sdk SDK $(xcrun --sdk "$sdk" --show-sdk-version)"
+          done
+          clang --version | head -1
+          echo "meson $(meson --version), ninja $(ninja --version)"
+          cmake --version | head -1
+          nasm -v
       - name: Build
         env:
           RECORD_SOURCES: ${{ github.workspace }}/builds/sources-${{ matrix.name }}.txt
