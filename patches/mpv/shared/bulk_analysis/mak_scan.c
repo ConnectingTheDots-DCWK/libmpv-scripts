@@ -1030,6 +1030,13 @@ static MP_THREAD_VOID coordinator_main(void *p)
         spawned++;
     }
 
+    /* The workers have their own copies of what the probe found: close it
+     * now instead of holding a connection (or an SMB handle) idle for the
+     * whole decode, beside the player's and the worker's. st points into
+     * it. */
+    st = NULL;
+    close_source(&probe_fmt);
+
     /* ── LIVE INCREMENTAL PUBLISH ──────────────────────────────────────────
      * Surface the envelope as the workers fill it, instead of one commit at
      * join. Each worker release-stores a monotone high-water of its SEALED
