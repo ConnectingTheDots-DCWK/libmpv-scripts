@@ -122,7 +122,7 @@ func TestWriteOverrideRoundTrip(t *testing.T) {
 		t.Errorf("DISABLED_PATCHES should list pcm_tap: %q", patchLine)
 	}
 	if strings.Contains(patchLine, "libsmb2") {
-		t.Error("required patch libsmb2 must never appear in DISABLED_PATCHES")
+		t.Error("libsmb2 was left on, so it must not appear in DISABLED_PATCHES")
 	}
 }
 

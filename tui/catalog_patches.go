@@ -8,12 +8,14 @@ package main
 // user can turn on or off from Settings ▸ Patches. The ID matches the token the
 // build scripts check in DISABLED_PATCHES (see scripts/shared/_audio_only.sh).
 //
-// Only the cross-platform "feature" patches are listed — the per-platform
-// build-correctness patches (Apple/iOS/Windows/Android fixups, rubberband,
-// libplacebo) and the structural patch_optional_deps are always applied and
-// aren't user-toggleable, so they're not listed here. Everything listed is
-// freely toggleable: the build's config audit adapts to the selection, so no
-// entry needs to be locked.
+// Only the "feature" and size-reduction patches are listed. Two of them act
+// on Windows only and are no-ops elsewhere: strip_win_resources and
+// timer_resolution. The per-platform build-correctness patches
+// (Apple/iOS/Windows/Android fixups, rubberband, libplacebo) and the
+// structural patch_optional_deps are always applied and aren't
+// user-toggleable, so they're not listed here. Everything listed is freely
+// toggleable: the build's config audit adapts to the selection, so no entry
+// needs to be locked.
 type PatchItem struct {
 	ID        string // token in DISABLED_PATCHES, e.g. "pcm_tap"
 	Title     string

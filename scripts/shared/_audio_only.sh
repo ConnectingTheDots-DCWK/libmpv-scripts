@@ -115,10 +115,11 @@ export AUDIO_PARSERS
 # always available via `-Drubberband=enabled` in mpv meson).
 # Filters dropped from the whitelist for the 0.1.0 cut (debug / utility
 # only — they have no business in a music-player API):
-#   abench, acopy, acue, aintegral, alatency, aloop, ametadata, anull,
-#   aperms, arealtime, areverse, asegment, aselect, asendcmd, asetnsamples,
-#   asetpts, asetrate, asettb, ashowinfo, asidedata, aspectralstats, astats,
-#   astreamselect, atrim, silencedetect, volume, volumedetect.
+#   abench, acopy, acue, alatency, aloop, ametadata, anull, aperms,
+#   arealtime, areverse, asegment, aselect, asendcmd, asetnsamples, asetpts,
+#   asettb, ashowinfo, asidedata, aspectralstats, astats, astreamselect,
+#   atrim, silencedetect, volume, volumedetect.
+# aintegral and asetrate came back later and are in the list below.
 # The decoder-side `--replaygain` (typed `ReplayGainSettings`) and `volume`
 # (typed `setVolume` / `setVolumeGain`) cover the corresponding user-facing
 # concepts; the lavfi `replaygain` filter would shadow ours so it's
