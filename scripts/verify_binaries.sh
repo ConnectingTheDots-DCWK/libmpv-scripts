@@ -868,6 +868,15 @@ _l13_windows_loadlibrary() {
     timeout 90 "$wine_bin" "winload_test.exe" "$dll_abs" 2>&1)"
   rc=$?
   rm -rf "$helper_dir"
+  _l13_windows_verdict "$via" "$rc" "$out"
+  return 0
+}
+
+# _l13_windows_verdict turns the exit code of winload_test.exe into the L13
+# result. Args: $1 = via ("native Wine" or "Hangover/FEX"), $2 = exit code,
+# $3 = the helper's output. verify/tests/l13_windows_test.sh checks it.
+_l13_windows_verdict() {
+  local via="$1" rc="$2" out="$3"
   case "$rc" in
     0)
       pass "L13 LoadLibrary ($via): DLL loads + initializes + patched props respond at runtime"
@@ -886,7 +895,8 @@ _l13_windows_loadlibrary() {
       ;;
     *)
       # The helper only ever returns 0 or 1. The previously-common code 29 (a
-      # Box64/FEX teardown fault) is fixed by the cwd co-location above, so any
+      # Box64/FEX teardown fault) is fixed by the cwd co-location in
+      # _l13_windows_loadlibrary, so any
       # OTHER abnormal code now means an unexpected emulator crash, not a broken
       # DLL — still inconclusive (the static layers validate it), but surface the
       # code so a genuinely new emulator regression is visible.
