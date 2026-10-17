@@ -65,6 +65,18 @@ two players in one process prefetch independently. Older versions used a
 function-scope static shared by every player: one player in a slow hook
 made the others skip their prefetch, and the static was a data race.
 
+===== Per-file options =====
+
+A prefetch opens the next entry with the global options, which during
+playback hold the per-file options of the playing entry (loadfile options,
+applied with a backup in play_current_file). The next entry would send the
+HTTP headers, chunk size and lavf options of the playing one, possibly to
+another host, and keep them after the transition, since the reused demuxer
+is not reopened. prefetch_next therefore skips an entry whose per-file
+options differ from those of the playing entry: same count, same names and
+values, in the same order. That transition opens the entry from scratch.
+Global setters called after the prefetch are not covered.
+
 ===== Entry lifetime =====
 
 process_hooks also runs client commands. A `playlist-remove` or
@@ -235,6 +247,21 @@ PRISTINE = (
 )
 
 PATCHED = (
+    '/* ' + MARKER + ': true when both entries carry the same per-file\n'
+    ' * options, in the same order. */\n'
+    'static bool mak_same_file_params(struct playlist_entry *a,\n'
+    '                                 struct playlist_entry *b)\n'
+    '{\n'
+    '    if (!a || a->num_params != b->num_params)\n'
+    '        return false;\n'
+    '    for (int n = 0; n < a->num_params; n++) {\n'
+    '        if (!bstr_equals(a->params[n].name, b->params[n].name) ||\n'
+    '            !bstr_equals(a->params[n].value, b->params[n].value))\n'
+    '            return false;\n'
+    '    }\n'
+    '    return true;\n'
+    '}\n'
+    '\n'
     'void prefetch_next(struct MPContext *mpctx)\n'
     '{\n'
     '    /* ' + HOOK_COMMENT + ' (' + MARKER + ').\n'
@@ -250,6 +277,12 @@ PATCHED = (
     '        return;\n'
     '\n'
     '    struct playlist_entry *new_entry = mp_next_file(mpctx, +1, false, false);\n'
+    '    /* The opener reads the global options, which hold the per-file\n'
+    '     * options of the playing entry. An entry with other ones would\n'
+    '     * send them and keep them after the transition, so it is not\n'
+    '     * prefetched. No log: this runs on every tick at end of file. */\n'
+    '    if (new_entry && !mak_same_file_params(mpctx->playing, new_entry))\n'
+    '        return;\n'
     '    if (new_entry && new_entry->filename) {\n'
     '        MP_VERBOSE(mpctx, "Prefetching: %s\\n", new_entry->filename);\n'
     '\n'
