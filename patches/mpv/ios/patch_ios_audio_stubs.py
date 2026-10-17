@@ -5,12 +5,13 @@
 """Patch mpv audio sources for iOS compatibility.
 
 iOS lacks the CoreAudio Hardware Abstraction Layer (HAL) that macOS provides.
-This patch applies four changes:
+This patch applies five changes:
 
 1. ao_avfoundation.m: Comments out macOS-only setAudioOutputDeviceUniqueID
 2. ao_audiounit.m: Removes MixWithOthers (prevents Now Playing on iOS)
 3. ao.h: Adds iOS stub types for CoreAudio HAL types
 4. ao_coreaudio_utils.c: Guards macOS code, adds iOS stub implementations
+5. ao_audiounit.m, ao_avfoundation.m: Remove the MoviePlayback session mode
 
 Every change is computed first and the files are written at the end, so a
 step that fails leaves the tree as it was.
@@ -24,6 +25,16 @@ mpv_dir = sys.argv[1]
 
 # (path, new content, message), written once every step has passed.
 pending = []
+
+
+def staged(path):
+    """The text of path with the edits already in pending."""
+    for staged_path, text, _ in reversed(pending):
+        if staged_path == path:
+            return text
+    with open(path) as f:
+        return f.read()
+
 
 # ── 1. ao_avfoundation.m: comment out macOS-only device property ────────────
 
@@ -251,6 +262,27 @@ new_src = (
 if not utils_patched:
     pending.append((utils_path, new_src,
                     "Patched ao_coreaudio_utils.c for iOS (full file guard + stubs)"))
+
+# ── 5. ao_audiounit.m, ao_avfoundation.m: no MoviePlayback mode ─────────────
+# mpv sets AVAudioSessionModeMoviePlayback at every AO init. Apple means that
+# mode for video, and it replaced the default mode that the host declares
+# (the kit's media session sets .default), so the mode depended on who wrote
+# last. The category stays: an app without a media session relies on mpv for
+# .playback. Each file must lose exactly this line and keep no other setMode
+# call: a call of another shape stops the build. Reads the staged text, since
+# step 2 already edits ao_audiounit.m.
+
+MOVIE_MODE = '    [instance setMode:AVAudioSessionModeMoviePlayback error:nil];\n'
+for path in (au_path, avf_path):
+    content = staged(path)
+    if 'setMode:' not in content:
+        continue
+    if content.count(MOVIE_MODE) != 1 or content.count('setMode:') != 1:
+        sys.exit(f"[patch_ios_audio_stubs] {path}: expected one MoviePlayback "
+                 f"setMode line and no other setMode call; the session code "
+                 f"of mpv changed")
+    pending.append((path, content.replace(MOVIE_MODE, '', 1),
+                    f"Patched {path.rsplit('/', 1)[-1]}: removed the MoviePlayback mode"))
 
 for path, text, message in pending:
     with open(path, 'w') as f:
