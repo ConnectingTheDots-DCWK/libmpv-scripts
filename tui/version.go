@@ -4,8 +4,9 @@
 
 package main
 
-// version is libmpv-scripts' own version — the build kit / TUI itself, tracked
-// independently of the libmpv binaries it produces (FFMPEG_VERSION et al. in
-// scripts/shared/_versions.sh) and of the mpv_audio_kit package it installs
-// into. Shown in the header; bumped together with CHANGELOG.md.
-const version = "0.1.5"
+// version is libmpv-scripts' own version: the build kit and TUI itself,
+// tracked independently of the libmpv binaries it produces (FFMPEG_VERSION et
+// al. in scripts/shared/_versions.sh) and of the mpv_audio_kit package it
+// installs into. Shown in the header; bumped together with CHANGELOG.md, which
+// TestVersionMatchesChangelog checks.
+const version = "0.2.1"
