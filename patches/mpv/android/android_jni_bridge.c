@@ -4,21 +4,23 @@
  * Use of this source code is governed by BSD 3-Clause license that can be found in the LICENSE file.
  */
 
-/* android_jni_bridge.c — Compiled into libmpv.so for Android only.
+/* android_jni_bridge.c: compiled into libmpv.so for Android only.
  *
  * mpv's audiotrack AO and several ffmpeg helpers (mediacodec hwaccel,
  * Android content:// URIs, …) reach the JVM via ffmpeg's
  * `av_jni_set_java_vm()` global. Android invokes JNI_OnLoad whenever a
  * shared library is brought in via System.loadLibrary(...), so the
  * canonical place to forward the VM pointer to ffmpeg is right here:
- * the plugin's Kotlin side calls System.loadLibrary("mpv") on engine
- * attach, Android's loader fires this JNI_OnLoad with a valid JavaVM*,
- * and ffmpeg's globals are wired up before any AO init runs.
+ * the plugin's Kotlin side calls System.loadLibrary("mpv_audio_kit")
+ * (libmpv_audio_kit.so, the SONAME set by MPV_SONAME) on engine attach,
+ * Android's loader fires this JNI_OnLoad with a valid JavaVM*, and
+ * ffmpeg's globals are wired up before any AO init runs.
  *
  * Without this hook, audiotrack reports
  *   `[ao/audiotrack] error: No Java virtual machine has been registered`
- * and mpv gets dragged through every other AO before giving up — i.e.
- * silent playback on a perfectly-functional device.
+ * and the autoprobe falls back to aaudio (API 26+) or opensles, which
+ * play through another driver than the intended one; null is used only
+ * when every driver fails.
  *
  * Reference: mpv-android does the same in its JNI bridge
  * (https://github.com/mpv-android/mpv-android).

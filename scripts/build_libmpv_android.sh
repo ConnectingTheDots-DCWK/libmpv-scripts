@@ -841,9 +841,9 @@ android_mpv() {
   # are immune to `--exclude-libs=ALL` (which only affects archive
   # members), so JNI_OnLoad stays exported via the Android version
   # script. When the consumer's Kotlin plugin does
-  # System.loadLibrary("mpv"), the Android loader fires JNI_OnLoad and
-  # ffmpeg's JNI globals get the JavaVM* — required for audiotrack and
-  # any mediacodec / content:// path.
+  # System.loadLibrary("mpv_audio_kit"), the Android loader fires
+  # JNI_OnLoad and ffmpeg's JNI globals get the JavaVM* — required for
+  # audiotrack and any mediacodec / content:// path.
   local bridge_src="$LIBMPV_SCRIPTS_ROOT/patches/mpv/android/android_jni_bridge.c"
   local bridge_obj="$bdir/android_jni_bridge.o"
   "$(ndk_cc "$abi")" -fPIC -O2 -c "$bridge_src" -o "$bridge_obj"

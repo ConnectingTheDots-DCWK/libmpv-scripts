@@ -1398,8 +1398,8 @@ check_binary() {
   phase exports
   # Per-platform allowlist of additional exports that are NOT leaks. On
   # Android the binary intentionally exposes `JNI_OnLoad` so that
-  # System.loadLibrary("mpv") can register the JavaVM with ffmpeg before
-  # the audiotrack AO initializes.
+  # System.loadLibrary("mpv_audio_kit") can register the JavaVM with
+  # ffmpeg before the audiotrack AO initializes.
   local allowed_extra_re='^$'
   case "$platform" in
     android) allowed_extra_re='^JNI_OnLoad$' ;;

@@ -3,11 +3,11 @@
 #
 # Same surface as scripts/shared/mpv.ver (the public mpv_* C API and the
 # mak_pcm_* live PCM API) PLUS JNI_OnLoad — the runtime hook Android calls
-# when libmpv.so is brought in via System.loadLibrary("mpv"). Compiled into the binary
-# from patches/mpv/android/android_jni_bridge.c, it forwards the
-# JavaVM* to ffmpeg's `av_jni_set_java_vm()` so audiotrack and other
-# JNI-dependent components have a working VM by the time the player
-# initializes.
+# when the library is brought in via System.loadLibrary("mpv_audio_kit").
+# Compiled into the binary from patches/mpv/android/android_jni_bridge.c,
+# it forwards the JavaVM* to ffmpeg's `av_jni_set_java_vm()` so audiotrack
+# and other JNI-dependent components have a working VM by the time the
+# player initializes.
 {
   global:
     mpv_*;
