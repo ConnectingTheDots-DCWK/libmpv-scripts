@@ -244,6 +244,32 @@ static bool measure_pts_offset(AVFormatContext *fmt, AVCodecContext *dec,
     return false;
 }
 
+/* Rebuilds [*swr] for [f] when the frame's sample format or channel layout
+ * differs from the ones [*swr] converts from ([layout], [format]). A stream
+ * can change its layout mid-file (two MP3s joined, stereo then mono), and
+ * swresample reads every plane of the layout it was built for, past the end
+ * of a frame with fewer. The rate stays the probe's: the axis counts
+ * samples at that rate, and a frame at another one is converted as before,
+ * without resampling. Returns false when the converter cannot be built. */
+static bool worker_swr_for(SwrContext **swr, AVChannelLayout *layout,
+                           int *format, const AVFrame *f, int rate)
+{
+    if (*swr && *format == f->format &&
+        !av_channel_layout_compare(layout, &f->ch_layout))
+        return true;
+    swr_free(swr);
+    av_channel_layout_uninit(layout);
+    if (swr_alloc_set_opts2(swr, &f->ch_layout, AV_SAMPLE_FMT_FLT, rate,
+                            &f->ch_layout, f->format, rate, 0, NULL) < 0 ||
+        !*swr || swr_init(*swr) < 0 ||
+        av_channel_layout_copy(layout, &f->ch_layout) < 0) {
+        swr_free(swr);
+        return false;
+    }
+    *format = f->format;
+    return true;
+}
+
 static MP_THREAD_VOID worker_chunk_thread(void *p)
 {
     struct worker_chunk *a = p;
@@ -252,12 +278,15 @@ static MP_THREAD_VOID worker_chunk_thread(void *p)
     AVFormatContext *fmt = NULL;
     AVCodecContext  *dec = NULL;
     SwrContext      *swr = NULL;
+    AVChannelLayout  swr_layout = {0};   /* what [swr] converts from */
+    int              swr_format = -1;
     AVFrame         *iframe = NULL;
     AVPacket        *pkt = NULL;
     float           *out_buf = NULL;     /* interleaved, all channels */
     int              out_buf_capacity = 0;   /* in frames */
     float           *mono_buf = NULL;    /* out_buf downmixed */
     int              channels = 0;
+    int              buf_channels = 0;   /* channels out_buf was sized for */
     int              ret = 0;
     int              samples_since_check = 0;
 
@@ -300,6 +329,9 @@ static MP_THREAD_VOID worker_chunk_thread(void *p)
     out_buf  = av_malloc((size_t)out_buf_capacity * channels * sizeof(float));
     mono_buf = av_malloc((size_t)out_buf_capacity * sizeof(float));
     if (!out_buf || !mono_buf) goto cleanup;
+    buf_channels = channels;
+    if (av_channel_layout_copy(&swr_layout, &dec->ch_layout) < 0) goto cleanup;
+    swr_format = dec->sample_fmt;
 
     /* A later worker places each frame at its timestamp less the offset
      * worker 0's sequential count trails the timestamps by, so every worker
@@ -406,9 +438,18 @@ reseek:
                 goto done_decode;
             }
 
+            /* Each frame is converted with a converter built for its own
+             * layout and format. */
+            if (!worker_swr_for(&swr, &swr_layout, &swr_format, iframe,
+                                a->sample_rate)) {
+                av_frame_unref(iframe);
+                goto cleanup;
+            }
+            channels = iframe->ch_layout.nb_channels;
             int needed = swr_get_out_samples(swr, iframe->nb_samples);
-            if (needed > out_buf_capacity) {
-                int new_cap = needed + 1024;
+            if (needed > out_buf_capacity || channels > buf_channels) {
+                int new_cap = needed > out_buf_capacity
+                    ? needed + 1024 : out_buf_capacity;
                 float *grown = av_realloc(out_buf,
                     (size_t)new_cap * channels * sizeof(float));
                 if (!grown) { av_frame_unref(iframe); goto cleanup; }
@@ -417,6 +458,7 @@ reseek:
                 if (!grown) { av_frame_unref(iframe); goto cleanup; }
                 mono_buf = grown;
                 out_buf_capacity = new_cap;
+                buf_channels = channels;
             }
             /* extended_data: data[] holds the first 8 planes only, and a
              * planar frame has one per channel (16 for a 16-channel Opus). */
@@ -454,6 +496,7 @@ cleanup:
     if (pkt)      av_packet_free(&pkt);
     if (iframe)   av_frame_free(&iframe);
     if (swr)      swr_free(&swr);
+    av_channel_layout_uninit(&swr_layout);
     if (dec)      avcodec_free_context(&dec);
     if (fmt)      avformat_close_input(&fmt);
     /* Liveness for the coordinator's publish loop, on every exit path (normal,
