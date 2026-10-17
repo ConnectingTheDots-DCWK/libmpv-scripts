@@ -93,6 +93,11 @@ verdict() {
 load x86_64 x86_64 0;   expect "x86_64 DLL on x86_64, helper passes" pass
 load x86_64 x86_64 1;   expect "x86_64 DLL on x86_64, helper reports a defect" fail
 load x86_64 aarch64 0;  expect "aarch64 DLL on x86_64 is skipped" info
+# Native Wine runs the DLL with no emulator in between, so a stall or a crash
+# is the DLL's own (0xC0000005 leaves Wine with exit code 5).
+load x86_64 x86_64 124; expect "x86_64 DLL on x86_64, stall" fail "Box64/FEX"
+load x86_64 x86_64 5;   expect "x86_64 DLL on x86_64, access violation" fail "Box64/FEX"
+load x86_64 x86_64 29;  expect "x86_64 DLL on x86_64, other abnormal exit" fail "Box64/FEX"
 verdict "Hangover/FEX" 124; expect "Hangover/FEX timeout" warn
 verdict "Hangover/FEX" 29;  expect "Hangover/FEX abnormal exit" warn
 

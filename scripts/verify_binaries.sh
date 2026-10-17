@@ -877,6 +877,10 @@ _l13_windows_loadlibrary() {
 # $3 = the helper's output. verify/tests/l13_windows_test.sh checks it.
 _l13_windows_verdict() {
   local via="$1" rc="$2" out="$3"
+  # The last lines of the helper's output without the Box64/Wine startup
+  # noise, so the actual reason is visible.
+  local reason
+  reason="$(printf '%s' "$out" | grep -avE 'BOX64|WowBox64|XDG_RUNTIME|^wine:|created the configuration' | tail -2 | tr '\n' ' ' || true)"
   case "$rc" in
     0)
       pass "L13 LoadLibrary ($via): DLL loads + initializes + patched props respond at runtime"
@@ -884,23 +888,34 @@ _l13_windows_verdict() {
     1)
       # The helper's deliberate failure (LoadLibrary / GetProcAddress / init /
       # patched-property mismatch) — a real defect, with a diagnostic on stderr.
-      # Filter the Box64/Wine startup noise so the actual reason is visible.
-      fail "L13 LoadLibrary failed: $(printf '%s' "$out" | grep -avE 'BOX64|WowBox64|XDG_RUNTIME|^wine:|created the configuration' | tail -2 | tr '\n' ' ')"
-      ;;
-    124)
-      # A timeout under Box64/FEX emulation means the runtime check couldn't
-      # finish — not that the DLL is broken. The static layers (L11 NEEDED
-      # allowlist) already validate it, so warn instead of failing.
-      warn "L13 LoadLibrary inconclusive: Wine/emulation timed out after 90s (prefix init under Box64/FEX is slow). Static checks still validate the DLL."
+      fail "L13 LoadLibrary failed: $reason"
       ;;
     *)
-      # The helper only ever returns 0 or 1. The previously-common code 29 (a
-      # Box64/FEX teardown fault) is fixed by the cwd co-location in
-      # _l13_windows_loadlibrary, so any
-      # OTHER abnormal code now means an unexpected emulator crash, not a broken
-      # DLL — still inconclusive (the static layers validate it), but surface the
-      # code so a genuinely new emulator regression is visible.
-      warn "L13 LoadLibrary inconclusive: helper exited abnormally (code $rc) under Box64/FEX emulation — unexpected (the cwd-teardown fix should prevent code 29). Static checks still validate the DLL."
+      # The helper only ever returns 0 or 1, so any other code is a crash and
+      # 124 is a stall. Native Wine runs the x86_64 DLL with no emulator in
+      # between, so the crash or the stall is the DLL's own, for example an
+      # access violation in mpv_initialize or mpv_terminate_destroy (Wine then
+      # exits with code 5). That fails, like the Linux dlopen test.
+      if [[ "$via" == "native Wine" ]]; then
+        if [[ "$rc" == "124" ]]; then
+          fail "L13 LoadLibrary timed out after 90s under native Wine: $reason"
+        else
+          fail "L13 LoadLibrary crashed (exit $rc) under native Wine: $reason"
+        fi
+      elif [[ "$rc" == "124" ]]; then
+        # A timeout under Box64/FEX emulation means the runtime check couldn't
+        # finish — not that the DLL is broken. The static layers (L11 NEEDED
+        # allowlist) already validate it, so warn instead of failing.
+        warn "L13 LoadLibrary inconclusive: Wine/emulation timed out after 90s (prefix init under Box64/FEX is slow). Static checks still validate the DLL."
+      else
+        # The previously-common code 29 (a Box64/FEX teardown fault) is fixed
+        # by the cwd co-location in _l13_windows_loadlibrary, so any OTHER
+        # abnormal code under emulation means an unexpected emulator crash,
+        # not a broken DLL — still inconclusive (the static layers validate
+        # it), but surface the code so a genuinely new emulator regression is
+        # visible.
+        warn "L13 LoadLibrary inconclusive: helper exited abnormally (code $rc) under Box64/FEX emulation — unexpected (the cwd-teardown fix should prevent code 29). Static checks still validate the DLL."
+      fi
       ;;
   esac
   return 0
