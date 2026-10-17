@@ -466,11 +466,12 @@ void mak_loudness_reset(void)
     mp_mutex_unlock(&g_loud_lock);
 }
 
-void mak_loudness_set_enabled(bool on)
+bool mak_loudness_set_enabled(bool on)
 {
-    atomic_store(&g_loud_enabled, on);
+    bool was_on = atomic_exchange(&g_loud_enabled, on);
     if (!on)
         mak_loudness_reset();
+    return was_on;
 }
 
 bool mak_loudness_is_enabled(void)

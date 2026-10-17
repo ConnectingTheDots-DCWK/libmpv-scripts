@@ -119,8 +119,9 @@ void mak_loudness_reset(void);
 
 /* The loudness-scan-enabled gate. OFF by default. Disabling clears the
  * published result; it does NOT bump the waveform generation (a
- * concurrent waveform-only scan keeps running). */
-void mak_loudness_set_enabled(bool on);
+ * concurrent waveform-only scan keeps running). Returns the previous
+ * value. */
+bool mak_loudness_set_enabled(bool on);
 bool mak_loudness_is_enabled(void);
 
 /* Whether the published state is "scanning" (a pass is in flight). */

@@ -29,7 +29,8 @@ static int mp_property_loudness_scan_data(void *ctx, struct m_property *prop,
  * ROLLING waveform is already accumulating, in which case the source
  * cannot be decoded up-front: the start is skipped so the envelope is not
  * wiped, and the scan is reported "unavailable". Setting it false clears
- * the published result but leaves a concurrent waveform-only scan running.
+ * the published result but leaves a concurrent waveform-only scan running;
+ * with the waveform off the pass ran for the loudness alone, so it stops.
  * While a file is still opening it only sets the flag, as waveform-enabled
  * does: the FILE_LOADED kick starts the scan with mpv's classification. */
 static int mp_property_loudness_scan_enabled(void *ctx,
@@ -46,7 +47,13 @@ static int mp_property_loudness_scan_enabled(void *ctx,
             return M_PROPERTY_OK;
         case M_PROPERTY_SET: {
             bool on = *(int *)arg != 0;
-            mak_loudness_set_enabled(on);
+            bool was_on = mak_loudness_set_enabled(on);
+            /* Turned off with the waveform off: nobody wants the pass, so
+             * it stops instead of decoding (and downloading) the rest of
+             * the file for a result that is dropped. Only on a real change,
+             * as for the waveform flag. */
+            if (!on && was_on && !mak_waveform_is_enabled())
+                mak_waveform_stop();
             if (on && mpctx->playback_initialized) {
                 if (mak_waveform_is_progressive_live()) {
                     /* A playback-grown PROGRESSIVE/ROLLING waveform is already
