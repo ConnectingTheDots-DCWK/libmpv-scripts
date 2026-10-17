@@ -375,7 +375,8 @@ LOADFILE_CALL_SITES = [
 # resets the state, so `loading` would latch with no opener thread running
 # until the next prefetch/cancel. Reset to idle before the bail returns. The
 # pristine prefetch_next has no such bail, so this is a no-op there — which
-# keeps this patch independent of patch_prefetch_hook.py.
+# keeps this patch independent of patch_prefetch_hook.py. When the hook patch
+# is in, exactly one of these anchors must match, or the patch fails.
 LOADFILE_OPTIONAL_CALL_SITES = [
     # Current hook patch: the bail also covers an entry removed by a client
     # command while the hook ran.
@@ -407,6 +408,11 @@ LOADFILE_OPTIONAL_CALL_SITES = [
 ]
 
 
+# Prefix of the prefetch_next comment of patch_prefetch_hook.py (its
+# HOOK_COMMENT): its presence tells that the hook patch is applied.
+HOOK_COMMENT = 'mpv_audio_kit: prefetch_next with on_load hook'
+
+
 def patch_loadfile_c(path):
     with open(path) as f:
         text = f.read()
@@ -424,9 +430,17 @@ def patch_loadfile_c(path):
                 f'Pristine anchor not found in {path}:\n{pristine[:120]}'
             )
         text = text.replace(pristine, patched, 1)
+    applied = 0
     for pristine, patched in LOADFILE_OPTIONAL_CALL_SITES:
-        if pristine in text:
+        if text.count(pristine) == 1:
             text = text.replace(pristine, patched, 1)
+            applied += 1
+    if HOOK_COMMENT in text and applied != 1:
+        raise RuntimeError(
+            f'patch_prefetch_hook.py is applied to {path}, but its bail in '
+            'prefetch_next matches no anchor of LOADFILE_OPTIONAL_CALL_SITES: '
+            'prefetch-state would stay loading after a skipped prefetch.'
+        )
     PENDING.append((path, text, 'Patched: '))
 
 
