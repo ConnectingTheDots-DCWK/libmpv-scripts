@@ -134,7 +134,9 @@ Like `pcm-tap-frame`, the bulk-analysis state is a process-wide
 singleton. With more than one Player loaded into the same process the
 LAST `loadfile` wins; every Player sees the same `waveform-data` until
 the next track-change. Pragmatic — the typical app runs one Player —
-and matches the existing tap's concurrency model.
+and matches the existing tap's concurrency model. Likewise a Player
+that closes its file (stop, the next file) stops an analysis still
+running, whichever Player started it.
 
 Files patched
 =============
@@ -146,7 +148,8 @@ Files patched
     audio/mak_feed.h/.c    NEW — cache-fed engine
     demux/mak_demux_feed.h/.c  NEW — packet feed queue
     demux/demux.c          feed field, push, end of file, release, attach
-    player/loadfile.c      kicks `mak_scan_start` after FILE_LOADED
+    player/loadfile.c      kicks `mak_scan_start` after FILE_LOADED, and
+                           `mak_scan_file_closed` when the file closes
     player/command.c       property registration + getter/setter
     player/main.c          setup in mp_create, teardown in mp_destroy
     meson.build            new source files added to the build
@@ -260,6 +263,27 @@ LOADFILE_NOTIFY_PATCHED = (
 )
 
 
+# Anchor: the close of the file in play_current_file, which every end goes
+# through (stop, the next file, an error, the end of the playlist), right
+# before the demuxer goes. An analysis still running for the file stops
+# there, instead of downloading and decoding it for nobody. With keep-open
+# the file stays loaded at its end and the analysis goes on. Pristine lines
+# lifted from mpv 0.41.0.
+LOADFILE_CLOSE_PRISTINE = (
+    '    mpctx->playback_initialized = false;\n'
+    '\n'
+    '    uninit_demuxer(mpctx);\n'
+)
+
+LOADFILE_CLOSE_PATCHED = (
+    '    mpctx->playback_initialized = false;\n'
+    '\n'
+    '    /* ' + MARKER + ' */\n'
+    '    mak_scan_file_closed();\n'
+    '    uninit_demuxer(mpctx);\n'
+)
+
+
 def patch_loadfile_c(path):
     with open(path) as f:
         text = f.read()
@@ -273,8 +297,13 @@ def patch_loadfile_c(path):
         raise RuntimeError(
             f'Pristine anchor (FILE_LOADED notify) not found exactly once in {path}.'
         )
+    if text.count(LOADFILE_CLOSE_PRISTINE) != 1:
+        raise RuntimeError(
+            f'Pristine anchor (file close) not found exactly once in {path}.'
+        )
     text = text.replace(LOADFILE_INCLUDE_PRISTINE, LOADFILE_INCLUDE_PATCHED, 1)
     text = text.replace(LOADFILE_NOTIFY_PRISTINE, LOADFILE_NOTIFY_PATCHED, 1)
+    text = text.replace(LOADFILE_CLOSE_PRISTINE, LOADFILE_CLOSE_PATCHED, 1)
     stage(path, text)
 
 

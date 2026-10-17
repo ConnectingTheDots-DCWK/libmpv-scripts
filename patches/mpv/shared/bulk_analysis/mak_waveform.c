@@ -175,6 +175,23 @@ int mak_waveform_begin_generation(void)
 void mak_waveform_mark_decoding(int gen) { set_state_if_current(gen, MAK_WAVE_DECODING); }
 void mak_waveform_mark_failed(int gen)   { set_state_if_current(gen, MAK_WAVE_FAILED); }
 
+int mak_waveform_cancel_running(void)
+{
+    int new_gen = 0;
+    mp_mutex_lock(&g_wave_lock);
+    /* Checked and bumped in one critical section: a commit checks the
+     * generation under this lock too, so a READY that just landed stays,
+     * and one that comes after is refused. */
+    if (g_wave.state == MAK_WAVE_DECODING ||
+        (g_wave.fed && g_wave.state == MAK_WAVE_PROGRESSIVE)) {
+        new_gen = atomic_fetch_add(&g_wave.current_gen, 1) + 1;
+        reset_g_wave_locked();
+        g_wave.state = MAK_WAVE_FAILED;
+    }
+    mp_mutex_unlock(&g_wave_lock);
+    return new_gen;
+}
+
 /* Arm PROGRESSIVE mode: lay out a fixed bin axis from [duration_secs] and
  * let the af-tap grow the envelope from playback (mak_waveform_fold_samples).
  * Used for sources we cannot parallel-decode (DASH/HLS transcode, live,

@@ -1173,6 +1173,18 @@ static void reopen_failed(int gen)
 #endif
 }
 
+void mak_scan_file_closed(void)
+{
+    int gen = mak_waveform_cancel_running();
+#if __has_include("audio/mak_loudness.h")
+    /* Under the new generation, as the core marks a new file's scan. */
+    if (gen)
+        mak_loudness_mark_failed(gen);
+#else
+    (void)gen;
+#endif
+}
+
 void mak_scan_reopen(int gen, const char *url, double duration_secs,
                      const AVDictionary *net_opts,
                      const struct mak_scan_track *track)

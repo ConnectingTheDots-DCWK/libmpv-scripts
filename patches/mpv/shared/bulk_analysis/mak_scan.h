@@ -86,6 +86,14 @@ void mak_scan_start(const char *url, double duration_secs,
                     struct mp_log *log, struct demuxer *demuxer,
                     struct sh_stream *audio);
 
+/* The loaded file is closing (stop, the next file, an error, the end of the
+ * playlist), called by the core before the demuxer goes. An analysis still
+ * running for it stops: its threads exit at their next generation check (a
+ * 4096-sample budget, or the interrupt callback of a blocked read), and the
+ * waveform and the loudness scan turn failed, as when a cache-fed pass loses
+ * its demuxer. A finished result stays. Core thread. */
+void mak_scan_file_closed(void);
+
 /* Core lifetime bracket, called from mp_create / mp_destroy. When the last
  * core goes away, the in-flight analysis is cancelled and its detached
  * threads are drained (bounded), so none outlives the libav and TLS state

@@ -109,6 +109,12 @@ int  mak_waveform_begin_generation(void);
 void mak_waveform_mark_decoding(int gen);
 void mak_waveform_mark_failed(int gen);
 
+/* The file is closing: a scan still running for it (the bulk decode, or a
+ * cache-fed pass) is cancelled by a new generation, and the state turns
+ * FAILED. A finished result and an envelope grown from playback are left
+ * as they are. Returns the new generation, or 0 when nothing ran. */
+int  mak_waveform_cancel_running(void);
+
 /* Arm the playback-grown strategies for a source the bulk path cannot decode
  * up-front (the engine calls these after classification). With no usable
  * duration arm_progressive falls back to FAILED; arm_rolling needs none. */
