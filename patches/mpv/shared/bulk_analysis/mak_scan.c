@@ -1055,6 +1055,13 @@ static MP_THREAD_VOID coordinator_main(void *p)
              * makes every bin visible); an in-flight worker exposes [0, hw). */
             bool wdone = atomic_load_explicit(&hw[w].done,
                                               memory_order_acquire);
+            /* A worker that ended in error fails the scan now: its region
+             * is not sealed, so counting it would jump the progress ahead,
+             * and the others would decode theirs for a result that is
+             * dropped. fail stops them at their next check. The status was
+             * written before the done release this acquire pairs with. */
+            if (wdone && chunks[w].status != 0)
+                goto fail;
             int h = wdone ? slice
                           : atomic_load_explicit(&hw[w].hw,
                                                  memory_order_acquire);
