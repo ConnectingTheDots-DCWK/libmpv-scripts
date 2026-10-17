@@ -38,10 +38,11 @@ States
                would be coalesced by mpv's property-change queue and the
                observer would never see the `used` value.
     failed   — opener thread completed but the demuxer creation failed
-               (network error, codec unsupported, hook abort). Same
-               persistence model as `used`: the state holds at `failed`
-               until the next prefetch_next (loading) or cancel
-               naturally clears it, so observers reliably see the
+               (network error, codec unsupported, hook abort). Set as
+               soon as the opener returns, while the current file still
+               plays. Same persistence model as `used`: the state holds
+               at `failed` until the next prefetch_next (loading) or
+               cancel naturally clears it, so observers reliably see the
                failure event.
 
 Transitions wired
@@ -49,6 +50,7 @@ Transitions wired
 
     prefetch_next()                 → loading
     handle_update_cache() polling   → ready (once open_done && reader idle)
+                                    → failed (once open_done without demuxer)
     open_demux_reentrant()
       ├─ "Using prefetched" branch  → used (persists)
       ├─ "Prefetched URL failed"    → failed (persists)
@@ -249,8 +251,8 @@ LOADFILE_HELPER_INSERT = LOADFILE_HELPER_ANCHOR + '\n\n' + (
     '    }\n'
     '}\n'
     '\n'
-    '/* ' + MARKER + ' ─── ready-detection poll, invoked from\n'
-    ' * handle_update_cache. Safe to call every tick: bails out early if\n'
+    '/* ' + MARKER + ' ─── ready and failed detection poll, invoked\n'
+    ' * from handle_update_cache. Safe to call every tick: bails out early if\n'
     ' * the state isn\'t LOADING so the demux_get_reader_state call only\n'
     ' * happens during the narrow window when it matters. */\n'
     'void mak_poll_prefetch_ready(struct MPContext *mpctx)\n'
@@ -262,8 +264,13 @@ LOADFILE_HELPER_INSERT = LOADFILE_HELPER_ANCHOR + '\n\n' + (
     '    if (!atomic_load(&mpctx->open_done))\n'
     '        return;\n'
     '    struct demuxer *d = mpctx->open_res_demuxer;\n'
-    '    if (!d)\n'
+    '    if (!d) {\n'
+    '        /* The opener returned without a demuxer: the prefetch open\n'
+    '         * failed. Say so now rather than at the transition. open_active\n'
+    '         * stays set until then, so no new prefetch overwrites it. */\n'
+    '        mak_set_prefetch_state(mpctx, 4 /* failed */);\n'
     '        return;\n'
+    '    }\n'
     '    struct demux_reader_state s;\n'
     '    demux_get_reader_state(d, &s);\n'
     '    /* Publish how much is buffered ahead (end - reader) for a\n'
