@@ -61,6 +61,7 @@ struct mak_feed_replay {
     bool active;                  /* packets left to replay */
     bool bof;                     /* the first one starts the file */
     bool eof;                     /* the replay reached the end of file */
+    int64_t stream_size;          /* the file's size at attach, or -1 */
 };
 
 /* Attach a feed of [sh]'s packets to [demuxer] (implemented in demux.c, so

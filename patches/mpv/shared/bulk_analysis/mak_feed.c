@@ -59,6 +59,12 @@
  * file to the re-open, downloading it twice. */
 #define MAK_FEED_END_SLACK_SECS 1.0
 
+/* What a complete file can still hold after its last audio packet: an
+ * ID3v1 tag (128 bytes), a small APE tag. A pass whose last packet ends
+ * this close to the end of the file reached it, whatever the duration
+ * says. A longer tail goes to the re-open, as before. */
+#define MAK_FEED_TAIL_BYTES 4096
+
 struct feed_args {
     int gen;
     struct mak_demux_feed *feed;
@@ -96,6 +102,7 @@ struct feed_dec {
     int64_t emitted;   /* sequential source sample of the next frame */
     int64_t first_pos; /* where the first frame was placed */
     double pkt_end;    /* where the last packet ended (NOPTS: unknown) */
+    int64_t byte_end;  /* the file byte after the last packet (-1: unknown) */
     /* The batch of the cache replay being decoded. */
     struct demux_packet *batch[MAK_FEED_REPLAY_BATCH];
     int batch_n, batch_i;
@@ -264,7 +271,7 @@ static bool decode(struct feed_dec *d, struct feed_args *a,
 static MP_THREAD_VOID feed_main(void *p)
 {
     struct feed_args *a = p;
-    struct feed_dec d = { .pkt_end = MP_NOPTS_VALUE };
+    struct feed_dec d = { .pkt_end = MP_NOPTS_VALUE, .byte_end = -1 };
 #if MAK_FEED_LOUDNESS
     d.loud_on = mak_loudness_is_enabled();
 #endif
@@ -325,13 +332,23 @@ static MP_THREAD_VOID feed_main(void *p)
             if (!decode(&d, a, NULL))
                 goto fail;
             /* Complete only if the decode reached the end of the stream: a
-             * download cut short also ends with an end of file. */
+             * download cut short also ends with an end of file. The end is
+             * where the duration puts it, or the end of the file: a
+             * duration estimated from the bitrate of the first frames (raw
+             * AAC, an MP3 without a Xing header) can lie far past it, and
+             * the re-open would download the file again for the same
+             * envelope, trimmed to the bins filled. */
+            int64_t size = mak_demux_feed_replay_state(a->feed)->stream_size;
+            bool at_duration = d.emitted - d.first_pos >= a->total_samples -
+                (int64_t)(MAK_FEED_END_SLACK_SECS * a->rate);
+            bool at_size = size > 0 && d.byte_end > 0 &&
+                d.byte_end >= size - MAK_FEED_TAIL_BYTES;
             complete = d.from_bof && d.anchored && !d.rate_changed &&
-                d.emitted - d.first_pos >= a->total_samples -
-                    (int64_t)(MAK_FEED_END_SLACK_SECS * a->rate);
+                (at_duration || at_size);
             reopen = !complete;
             break;
         }
+        d.byte_end = dp->pos >= 0 && dp->len > 0 ? dp->pos + dp->len : -1;
         bool jump = false;
         if (dp->pts != MP_NOPTS_VALUE) {
             jump = d.pkt_end != MP_NOPTS_VALUE &&
