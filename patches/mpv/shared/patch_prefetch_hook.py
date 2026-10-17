@@ -14,10 +14,33 @@ on_load to rewrite `stream-open-filename` for custom URL schemes
 stream layer with an unresolved URL and fail with "No protocol handler found".
 
 This patch mirrors the normal playback path (`play_current_file`) inside
-`prefetch_next`: it temporarily points `mpctx->filename` and
-`mpctx->stream_open_filename` at the prefetch URL, runs `process_hooks`
-synchronously on the core thread, reads the possibly-rewritten URL back,
-restores the previous state, and only then spawns the opener thread.
+`prefetch_next`: it points the hook view of the player at the prefetch URL,
+runs `process_hooks` synchronously on the core thread, reads the
+possibly-rewritten URL back, and only then spawns the opener thread.
+
+===== The hook view =====
+
+The playing file keeps `mpctx->filename`, `mpctx->stream_open_filename` and
+`mpctx->demuxer` while the hook runs. `process_hooks` pumps `mp_idle`, which
+runs client commands and `handle_command_updates`, so everything that reads
+those fields keeps working on the playing file: duration, metadata, cover
+art, time-pos, the waveform and loudness setters, track switches,
+`dump-cache` (cache_dump_poll asserts a demuxer) and the watch-later
+commands.
+
+The entry being loaded is seen through three MPContext fields (player/core.h):
+`mak_prefetch_hook_active`, `mak_prefetch_filename` and `mak_prefetch_sof`.
+While the flag is set, the `path` and `filename` properties report the entry
+being loaded, as in a normal on_load, and `stream-open-filename` reads and
+writes `mak_prefetch_sof` (player/command.c). The setter refuses a write
+while a demuxer is attached, except under the flag, so the hook can still
+rewrite the URL of the next entry. `media-title` stays the playing file's.
+
+Older versions masked `mpctx->demuxer` to NULL around the hook instead, and
+moved `mpctx->filename` to the prefetch URL. That crashed in cache_dump_poll
+with a dump-cache open, hid every demuxer property of the playing file,
+turned track switches into no-ops and pointed delete-watch-later-config and
+rescan-external-files at the next entry.
 
 ===== Re-entry guard =====
 
@@ -41,37 +64,6 @@ the mpv core thread, so the static is single-threaded and safe. Any
 re-entry attempt (from handle_update_cache via mp_idle) bails out
 immediately via the guard.
 
-===== NULL-masking mpctx->demuxer =====
-
-The property setter `mp_property_stream_open_filename` (player/command.c)
-refuses to accept new values while a demuxer is already attached:
-
-    case M_PROPERTY_SET: {
-        if (mpctx->demuxer)
-            return M_PROPERTY_ERROR;
-        ...
-    }
-
-This guard is there to prevent hook-driven URL rewrites from racing with
-the currently-playing stream. In `play_current_file`, `mpctx->demuxer` is
-still NULL when the on_load hook fires, so the setter accepts the rewrite.
-
-During prefetch, however, the current track's demuxer is very much alive:
-the hook would fire against a non-NULL `mpctx->demuxer`, the setter would
-return M_PROPERTY_ERROR, the Dart `setRawProperty` call would no-op, and
-mpv would end up opening the raw `plex-transcode://` URL.
-
-The workaround: save `mpctx->demuxer`, set it to NULL around the
-`process_hooks` call, then restore it. It's safe because:
-  - The re-entry guard above prevents nested prefetch_next from running
-    (so no recursive path touches mpctx->demuxer).
-  - `handle_update_cache` (the function called from mp_idle inside
-    process_hooks) short-circuits on `!mpctx->demuxer` and does nothing.
-  - The current playback's audio chain reads from its own demuxer handle
-    (`mpctx->ao_chain->...`), not by dereferencing mpctx->demuxer again.
-  - We hold mpctx->demuxer=NULL only for the duration of the synchronous
-    hook pump — typically <100 ms — before restoring it.
-
 ===== Entry lifetime =====
 
 process_hooks also runs client commands. A `playlist-remove` or
@@ -85,11 +77,11 @@ current entry the same way.
 ===== Memory =====
 
 The prefetch URL is talloc'd locally (`owned_url`) with parent=NULL. The
-hook may replace `stream_open_filename` by calling the mpv property setter
-`mp_property_stream_open_filename`, which does:
+hook may replace it through the patched `stream-open-filename` setter, which
+does:
 
-    mpctx->stream_open_filename =
-        talloc_strdup(mpctx->stream_open_filename, *(char **)arg);
+    mpctx->mak_prefetch_sof =
+        talloc_strdup(mpctx->mak_prefetch_sof, *(char **)arg);
 
 i.e. the new allocation becomes a talloc child of `owned_url`. When we
 later call `talloc_free(owned_url)`, talloc frees the root and all its
@@ -97,16 +89,133 @@ children (including any replacement the hook allocated). Zero double-free,
 zero leak.
 
 We snapshot the final string via talloc_strdup into `resolved_url` (also
-parent=NULL) before restoring mpctx->filename / stream_open_filename to the
-saved pointers, so the URL we hand to start_open() survives the cleanup.
+parent=NULL) before clearing the hook view, so the URL we hand to
+start_open() survives the cleanup.
+
+Usage
+=====
+
+    python3 patch_prefetch_hook.py <mpv_source_dir>
+
+The older form with the path of player/loadfile.c is still accepted.
 """
+import os
 import sys
 
-fn = sys.argv[1]  # path to player/loadfile.c
-with open(fn) as f:
-    content = f.read()
+# Present in every file this patch writes, so a second run changes nothing.
+MARKER = 'MAK_PREFETCH_HOOK_PATCH_V2'
 
-MARKER = 'mpv_audio_kit: prefetch_next with on_load hook, re-entry guard, demuxer mask'
+# Prefix of the prefetch_next comment in every version of this patch.
+# patch_prefetch_state.py looks for it to know the hook bail must exist.
+HOOK_COMMENT = 'mpv_audio_kit: prefetch_next with on_load hook'
+
+PENDING = []
+
+
+def write_pending():
+    for path, text, label in PENDING:
+        with open(path, 'w') as f:
+            f.write(text)
+        print(f'{label}{path}')
+
+
+# ─── core.h ────────────────────────────────────────────────────────────
+
+CORE_PRISTINE = (
+    '    char *filename; // immutable copy of playing->filename (or NULL)\n'
+    '    char *stream_open_filename;\n'
+)
+
+CORE_PATCHED = CORE_PRISTINE + (
+    '    /* ' + MARKER + ' ─── set by prefetch_next while it runs the\n'
+    '     * on_load hook of the next entry (player/loadfile.c). The playing\n'
+    '     * file keeps the two fields above and its demuxer. path, filename\n'
+    '     * and stream-open-filename report the entry being loaded from these\n'
+    '     * (player/command.c). Core thread only. */\n'
+    '    bool mak_prefetch_hook_active;\n'
+    '    char *mak_prefetch_filename;\n'
+    '    char *mak_prefetch_sof;\n'
+)
+
+
+# ─── command.c ─────────────────────────────────────────────────────────
+
+COMMAND_SITES = [
+    (
+        'path getter',
+        '    MPContext *mpctx = ctx;\n'
+        '    if (!mpctx->filename)\n'
+        '        return M_PROPERTY_UNAVAILABLE;\n'
+        '    char *path = mp_normalize_path(NULL, mpctx->filename);\n',
+        '    MPContext *mpctx = ctx;\n'
+        '    /* ' + MARKER + ': the entry the prefetch hook is loading. */\n'
+        '    const char *mak_name = mpctx->mak_prefetch_hook_active\n'
+        '                           ? mpctx->mak_prefetch_filename\n'
+        '                           : mpctx->filename;\n'
+        '    if (!mak_name)\n'
+        '        return M_PROPERTY_UNAVAILABLE;\n'
+        '    char *path = mp_normalize_path(NULL, mak_name);\n',
+    ),
+    (
+        'filename getter',
+        '    MPContext *mpctx = ctx;\n'
+        '    if (!mpctx->filename)\n'
+        '        return M_PROPERTY_UNAVAILABLE;\n'
+        '    char *filename = talloc_strdup(NULL, mpctx->filename);\n',
+        '    MPContext *mpctx = ctx;\n'
+        '    /* ' + MARKER + ': the entry the prefetch hook is loading.\n'
+        '     * media-title falls back to this getter with its own name and\n'
+        '     * stays the playing file\'s. */\n'
+        '    const char *mak_name = mpctx->filename;\n'
+        '    if (mpctx->mak_prefetch_hook_active &&\n'
+        '        strcmp(prop->name, "filename") == 0)\n'
+        '        mak_name = mpctx->mak_prefetch_filename;\n'
+        '    if (!mak_name)\n'
+        '        return M_PROPERTY_UNAVAILABLE;\n'
+        '    char *filename = talloc_strdup(NULL, mak_name);\n',
+    ),
+    (
+        'stream-open-filename property',
+        '    MPContext *mpctx = ctx;\n'
+        '    if (!mpctx->stream_open_filename || !mpctx->playing)\n'
+        '        return M_PROPERTY_UNAVAILABLE;\n'
+        '    switch (action) {\n'
+        '    case M_PROPERTY_SET: {\n'
+        '        if (mpctx->demuxer)\n'
+        '            return M_PROPERTY_ERROR;\n'
+        '        mpctx->stream_open_filename =\n'
+        '            talloc_strdup(mpctx->stream_open_filename, *(char **)arg);\n'
+        '        mp_notify_property(mpctx, prop->name);\n'
+        '        return M_PROPERTY_OK;\n'
+        '    }\n'
+        '    case M_PROPERTY_GET_TYPE:\n'
+        '    case M_PROPERTY_GET: {\n'
+        '        char *path = mp_normalize_path(NULL, mpctx->stream_open_filename);\n',
+        '    MPContext *mpctx = ctx;\n'
+        '    /* ' + MARKER + ': while prefetch_next runs the on_load hook of\n'
+        '     * the next entry, this is that entry\'s URL, writable although the\n'
+        '     * playing file has a demuxer. The playing file keeps its own. */\n'
+        '    char **sof = mpctx->mak_prefetch_hook_active\n'
+        '                 ? &mpctx->mak_prefetch_sof\n'
+        '                 : &mpctx->stream_open_filename;\n'
+        '    if (!*sof || !mpctx->playing)\n'
+        '        return M_PROPERTY_UNAVAILABLE;\n'
+        '    switch (action) {\n'
+        '    case M_PROPERTY_SET: {\n'
+        '        if (mpctx->demuxer && !mpctx->mak_prefetch_hook_active)\n'
+        '            return M_PROPERTY_ERROR;\n'
+        '        *sof = talloc_strdup(*sof, *(char **)arg);\n'
+        '        mp_notify_property(mpctx, prop->name);\n'
+        '        return M_PROPERTY_OK;\n'
+        '    }\n'
+        '    case M_PROPERTY_GET_TYPE:\n'
+        '    case M_PROPERTY_GET: {\n'
+        '        char *path = mp_normalize_path(NULL, *sof);\n',
+    ),
+]
+
+
+# ─── loadfile.c ────────────────────────────────────────────────────────
 
 # Pristine prefetch_next from mpv v0.41.0 (player/loadfile.c).
 PRISTINE = (
@@ -126,7 +235,7 @@ PRISTINE = (
 PATCHED = (
     'void prefetch_next(struct MPContext *mpctx)\n'
     '{\n'
-    '    /* mpv_audio_kit: prefetch_next with on_load hook, re-entry guard, demuxer mask.\n'
+    '    /* ' + HOOK_COMMENT + ' (' + MARKER + ').\n'
     '     *\n'
     '     * process_hooks() below pumps mp_idle, which calls handle_update_cache,\n'
     '     * which at end-of-file calls prefetch_next again. Without this guard we\n'
@@ -152,31 +261,31 @@ PATCHED = (
     '         * up if the entry was removed meanwhile. */\n'
     '        new_entry->reserved += 1;\n'
     '\n'
-    '        char *saved_filename = mpctx->filename;\n'
-    '        char *saved_sof = mpctx->stream_open_filename;\n'
+    '        /* The playing file keeps filename, stream_open_filename and its\n'
+    '         * demuxer, so its properties, commands and cache dump keep\n'
+    '         * working while the hook runs. The hook sees the entry being\n'
+    '         * loaded: path and filename report mak_prefetch_filename, and\n'
+    '         * stream-open-filename reads and writes mak_prefetch_sof, also\n'
+    '         * with a demuxer attached (player/command.c). */\n'
     '        char *owned_url = talloc_strdup(NULL, new_entry->filename);\n'
-    '        mpctx->filename = owned_url;\n'
-    '        mpctx->stream_open_filename = owned_url;\n'
-    '\n'
-    '        /* NULL-mask the current demuxer so that the stream-open-filename\n'
-    '         * property setter accepts the hook-driven rewrite. The setter in\n'
-    '         * command.c refuses when mpctx->demuxer != NULL. The re-entry\n'
-    '         * guard above prevents nested prefetch_next from touching the\n'
-    '         * demuxer while it is temporarily NULL, and handle_update_cache\n'
-    '         * inside mp_idle short-circuits on !mpctx->demuxer. */\n'
-    '        struct demuxer *saved_demuxer = mpctx->demuxer;\n'
-    '        mpctx->demuxer = NULL;\n'
+    '        mpctx->mak_prefetch_filename = owned_url;\n'
+    '        mpctx->mak_prefetch_sof = owned_url;\n'
+    '        mpctx->mak_prefetch_hook_active = true;\n'
     '\n'
     '        mak_in_prefetch_hooks = true;\n'
     '        process_hooks(mpctx, "on_load");\n'
     '        mak_in_prefetch_hooks = false;\n'
     '\n'
-    '        mpctx->demuxer = saved_demuxer;\n'
-    '\n'
-    '        char *resolved_url = talloc_strdup(NULL, mpctx->stream_open_filename);\n'
-    '        mpctx->filename = saved_filename;\n'
-    '        mpctx->stream_open_filename = saved_sof;\n'
+    '        char *resolved_url = talloc_strdup(NULL, mpctx->mak_prefetch_sof);\n'
+    '        mpctx->mak_prefetch_hook_active = false;\n'
+    '        mpctx->mak_prefetch_filename = NULL;\n'
+    '        mpctx->mak_prefetch_sof = NULL;\n'
     '        talloc_free(owned_url);\n'
+    '        /* An observer that read the hook view gets the playing file\n'
+    '         * back. Unchanged values send no event. */\n'
+    '        mp_notify_property(mpctx, "path");\n'
+    '        mp_notify_property(mpctx, "filename");\n'
+    '        mp_notify_property(mpctx, "stream-open-filename");\n'
     '\n'
     '        bool entry_removed = new_entry->removed;\n'
     '        int stream_flags = new_entry->stream_flags;\n'
@@ -194,35 +303,84 @@ PATCHED = (
     '}'
 )
 
-if MARKER in content:
-    print('Patched loadfile.c: prefetch_next already patched (skipped)')
-    sys.exit(0)
 
-# Apply-order contract: this patch MUST run before patch_prefetch_state.py.
-# That patch inserts its `loading` transition immediately after the
-# MP_VERBOSE("Prefetching") line that our PRISTINE anchor matches verbatim;
-# if it ran first our anchor would no longer match and we'd hard-fail with a
-# misleading "clean the source" message. Detect the inversion explicitly.
-if 'MAK_PREFETCH_STATE_PATCH_V1' in content:
-    print(
-        'ERROR: patch_prefetch_state.py ran before patch_prefetch_hook.py '
-        '(wrong apply order). Apply the hook patch first — see '
-        'apply_mpv_patches_common() in _audio_only.sh.',
-        file=sys.stderr,
-    )
-    sys.exit(1)
+def read(path):
+    with open(path) as f:
+        return f.read()
 
-if PRISTINE not in content:
-    print(
-        'ERROR: could not find pristine prefetch_next in %s.\n'
-        'Clean the extracted mpv source and rebuild:\n'
-        '    rm -rf "$BUILD_DIR/src/mpv-<version>"' % fn,
-        file=sys.stderr,
-    )
-    sys.exit(1)
 
-content = content.replace(PRISTINE, PATCHED, 1)
+def patch_core_h(path):
+    text = read(path)
+    if MARKER in text:
+        print(f'Already patched: {path}')
+        return
+    if text.count(CORE_PRISTINE) != 1:
+        raise RuntimeError(
+            f'Pristine anchor (MPContext filename fields) not found in {path}.'
+        )
+    PENDING.append((path, text.replace(CORE_PRISTINE, CORE_PATCHED, 1),
+                    'Patched: '))
 
-with open(fn, 'w') as f:
-    f.write(content)
-print('Patched loadfile.c: prefetch_next on_load hook + re-entry guard applied')
+
+def patch_command_c(path):
+    text = read(path)
+    if MARKER in text:
+        print(f'Already patched: {path}')
+        return
+    for name, pristine, patched in COMMAND_SITES:
+        if text.count(pristine) != 1:
+            raise RuntimeError(
+                f'Pristine anchor ({name}) not found in {path}.'
+            )
+        text = text.replace(pristine, patched, 1)
+    PENDING.append((path, text, 'Patched: '))
+
+
+def patch_loadfile_c(path):
+    text = read(path)
+    if MARKER in text:
+        print(f'Already patched: {path}')
+        return
+    if HOOK_COMMENT in text:
+        raise RuntimeError(
+            f'An older prefetch_hook patch is applied to {path}. Clean the '
+            'extracted mpv source and rebuild:\n'
+            '    rm -rf "$BUILD_DIR/src/mpv-<version>"'
+        )
+    # Apply-order contract: this patch MUST run before patch_prefetch_state.py.
+    # That patch inserts its `loading` transition immediately after the
+    # MP_VERBOSE("Prefetching") line that our PRISTINE anchor matches
+    # verbatim; if it ran first our anchor would no longer match and we'd
+    # hard-fail with a misleading "clean the source" message. Detect the
+    # inversion explicitly.
+    if 'MAK_PREFETCH_STATE_PATCH_V1' in text:
+        raise RuntimeError(
+            'patch_prefetch_state.py ran before patch_prefetch_hook.py '
+            '(wrong apply order). Apply the hook patch first, see '
+            'apply_mpv_patches_common() in _audio_only.sh.'
+        )
+    if text.count(PRISTINE) != 1:
+        raise RuntimeError(
+            f'Could not find pristine prefetch_next in {path}. Clean the '
+            'extracted mpv source and rebuild:\n'
+            '    rm -rf "$BUILD_DIR/src/mpv-<version>"'
+        )
+    PENDING.append((path, text.replace(PRISTINE, PATCHED, 1), 'Patched: '))
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(f'Usage: {sys.argv[0]} <mpv_src_dir>')
+        sys.exit(1)
+    src = sys.argv[1]
+    if not os.path.isdir(src):
+        # Older form: the path of player/loadfile.c.
+        src = os.path.dirname(os.path.dirname(os.path.abspath(src)))
+    patch_core_h(os.path.join(src, 'player', 'core.h'))
+    patch_command_c(os.path.join(src, 'player', 'command.c'))
+    patch_loadfile_c(os.path.join(src, 'player', 'loadfile.c'))
+    write_pending()
+
+
+if __name__ == '__main__':
+    main()
