@@ -18,6 +18,18 @@ blocking write, which paces the loop while there is audio.
    the track is fed silence instead of running dry, and it waits for the
    buffer lock, so a busy lock is not mistaken for a gap.
 
+2. Dead track. When audioserver dies (a crash, a Bluetooth codec change on
+   some devices), the write returns ERROR_DEAD_OBJECT and the driver
+   recreated the AudioTrack without calling play(): the thread then waited
+   on a stopped track for good, with the player playing, the position
+   stuck and audio-output-state active. The recreated track also kept the
+   written frame count and timestamps of the old one, and a failed
+   recreation left no track at all. The thread now stops using the dead
+   track and asks mpv to reload the output, as aaudio does on a
+   disconnect: mpv closes it and opens a new one from the core, which
+   starts it with play() and fresh counters, and audio-output-state goes
+   through initializing again.
+
 Each fix has its own marker and runs once. All anchors are checked before
 the file is written, so a mismatch leaves the tree as it was.
 
@@ -94,6 +106,52 @@ edit(IDLE, [
         "                continue;\n"
         "            }\n"
         "            int ret = AudioTrack_write(ao, len);\n",
+    ),
+])
+
+# ── 2. Dead track: reload the output instead of a silent recreation ─────────
+DEAD = "MAK_AUDIOTRACK_DEAD_OBJECT_PATCH_V1"
+edit(DEAD, [
+    (
+        "    bool reset_pending;\n",
+        "    bool reset_pending;\n"
+        f"    // {DEAD}: the thread no longer uses the track\n"
+        "    bool mak_dead_object;\n",
+    ),
+    (
+        "static int AudioTrack_Recreate(struct ao *ao)\n"
+        "{\n"
+        "    struct priv *p = ao->priv;\n"
+        "    JNIEnv *env = MP_JNI_GET_ENV(ao);\n"
+        "\n"
+        "    MP_JNI_CALL_VOID(p->audiotrack, AudioTrack.release);\n"
+        "    MP_JNI_EXCEPTION_LOG(ao);\n"
+        "    MP_JNI_GLOBAL_FREEP(&p->audiotrack);\n"
+        "    return AudioTrack_New(ao);\n"
+        "}\n"
+        "\n",
+        "",
+    ),
+    (
+        "        if (p->audiotrack) {\n"
+        "            state = MP_JNI_CALL_INT(p->audiotrack, AudioTrack.getPlayState);\n",
+        "        if (p->audiotrack && !p->mak_dead_object) {\n"
+        "            state = MP_JNI_CALL_INT(p->audiotrack, AudioTrack.getPlayState);\n",
+    ),
+    (
+        "                MP_WARN(ao, \"AudioTrack.write failed with ERROR_DEAD_OBJECT. Recreating AudioTrack...\\n\");\n"
+        "                if (AudioTrack_Recreate(ao) < 0) {\n"
+        "                    MP_ERR(ao, \"AudioTrack_Recreate failed\\n\");\n"
+        "                }\n",
+        f"                // {DEAD}:\n"
+        "                // the track died with audioserver. A track recreated\n"
+        "                // here never started and kept the counters of the old\n"
+        "                // one. mpv reopens the output from the core instead, as\n"
+        "                // for an aaudio disconnect; until then the thread\n"
+        "                // leaves the dead track alone.\n"
+        "                MP_WARN(ao, \"AudioTrack.write failed with ERROR_DEAD_OBJECT. Reloading the audio output...\\n\");\n"
+        "                p->mak_dead_object = true;\n"
+        "                ao_request_reload(ao);\n",
     ),
 ])
 
