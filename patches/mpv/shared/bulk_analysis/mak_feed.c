@@ -69,6 +69,7 @@ struct feed_args {
     int64_t total_samples;    /* the axis, as the bulk coordinator builds it */
     char *url;                /* for the re-open */
     AVDictionary *net_opts;   /* mpv's network options, for the re-open */
+    struct mak_scan_track track; /* the stream of [url] to re-open */
 };
 
 struct feed_dec {
@@ -368,7 +369,8 @@ static MP_THREAD_VOID feed_main(void *p)
     /* The pass cannot cover the file: the re-open takes the generation over,
      * from a clean state, as it would have without the feed. */
     if (reopen && mak_waveform_fed_abandon(a->gen))
-        mak_scan_reopen(a->gen, a->url, a->duration_secs, a->net_opts);
+        mak_scan_reopen(a->gen, a->url, a->duration_secs, a->net_opts,
+                        &a->track);
     /* The demuxer went away before the end (stop, next file): nothing will
      * finish this generation, so close it instead of leaving a partial
      * envelope on "progressive" and the loudness on "scanning". */
@@ -407,6 +409,7 @@ done:
 
 bool mak_feed_start(int gen, struct demuxer *demuxer, struct sh_stream *audio,
                     double duration_secs, const char *url,
+                    const struct mak_scan_track *track,
                     struct mpv_global *global, struct mp_log *log)
 {
     if (!demuxer || !audio || !audio->codec || !url ||
@@ -426,6 +429,7 @@ bool mak_feed_start(int gen, struct demuxer *demuxer, struct sh_stream *audio,
     }
     a->gen = gen;
     a->par = par;
+    a->track = *track;
     a->url = strdup(url);
     if (!a->url) {
         avcodec_parameters_free(&a->par);

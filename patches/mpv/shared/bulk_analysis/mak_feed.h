@@ -23,14 +23,17 @@ struct demuxer;
 struct sh_stream;
 struct mpv_global;
 struct mp_log;
+struct mak_scan_track;
 
 /* Starts the cache-fed analysis of [audio] on [demuxer] for waveform
  * generation [gen]. Call on the core thread. Returns false when the demuxer
  * keeps no seekable cache or the stream cannot be decoded; the caller then
- * falls back to re-opening the source. [url], [global] and [log] serve the
- * re-open a pass that cannot be clean hands over to. */
+ * falls back to re-opening the source. [url], [track] (which stream of [url]
+ * [audio] is), [global] and [log] serve the re-open a pass that cannot be
+ * clean hands over to. */
 bool mak_feed_start(int gen, struct demuxer *demuxer, struct sh_stream *audio,
                     double duration_secs, const char *url,
+                    const struct mak_scan_track *track,
                     struct mpv_global *global, struct mp_log *log);
 
 #endif

@@ -28,6 +28,9 @@
 #include <libavutil/samplefmt.h>
 #include <libswresample/swresample.h>
 
+#include "common/msg.h"
+#include "demux/demux.h"
+#include "demux/stheader.h"
 #include "osdep/threads.h"
 #include "osdep/timer.h"
 #include "stream/stream.h"
@@ -514,6 +517,7 @@ struct coord_args {
     int    my_gen;
     double duration_secs; /* caller's (mpv's) duration — PROGRESSIVE axis */
     AVDictionary *net_opts; /* mpv's network options; coordinator owns */
+    struct mak_scan_track track; /* the audio stream the player plays */
 };
 
 /* Abort a coordinator's blocking probe (avformat_open_input /
@@ -529,6 +533,32 @@ static int coord_interrupt_cb(void *opaque)
 {
     int my_gen = *(int *)opaque;
     return mak_waveform_current_gen() != my_gen;
+}
+
+/* The audio stream of [fmt] the player plays ([t], see scan_track_of): the
+ * same stream index when mpv opened the source with lavf, the same track
+ * number with mpv's own Matroska demuxer (lavf numbers Matroska streams by
+ * it), else the same position among the audio streams. The first audio
+ * stream when none matches, or when the player plays none. -1 without
+ * audio. */
+static int pick_audio_stream(const AVFormatContext *fmt,
+                             const struct mak_scan_track *t)
+{
+    int first = -1, nth = -1, ordinal = 0;
+    for (unsigned i = 0; i < fmt->nb_streams; i++) {
+        const AVStream *st = fmt->streams[i];
+        if (st->codecpar->codec_type != AVMEDIA_TYPE_AUDIO)
+            continue;
+        if (t->lavf_index == (int)i)
+            return (int)i;
+        if (t->mkv_id >= 0 && st->id == t->mkv_id)
+            return (int)i;
+        if (first < 0)
+            first = (int)i;
+        if (nth < 0 && ordinal++ == t->ordinal)
+            nth = (int)i;
+    }
+    return nth >= 0 ? nth : first;
 }
 
 /* Whether lavf's demuxer [name] (a comma list such as "mov,mp4,m4a,...")
@@ -657,6 +687,7 @@ static MP_THREAD_VOID coordinator_main(void *p)
     double dur_secs = args->duration_secs;
     /* Shared read-only with the workers, freed in cleanup after they join. */
     AVDictionary *net_opts = args->net_opts;
+    struct mak_scan_track track = args->track;
     free(args);
 
     AVFormatContext   *probe_fmt = NULL;
@@ -697,13 +728,7 @@ static MP_THREAD_VOID coordinator_main(void *p)
     if (open_source(&probe_fmt, url, net_opts) < 0) goto fail;
     if (avformat_find_stream_info(probe_fmt, NULL) < 0)       goto fail;
 
-    for (unsigned i = 0; i < probe_fmt->nb_streams; i++) {
-        if (probe_fmt->streams[i]->codecpar->codec_type ==
-            AVMEDIA_TYPE_AUDIO) {
-            audio_idx = (int)i;
-            break;
-        }
-    }
+    audio_idx = pick_audio_stream(probe_fmt, &track);
     if (audio_idx < 0) goto fail;
 
     AVStream *st = probe_fmt->streams[audio_idx];
@@ -1004,7 +1029,8 @@ static void reopen_failed(int gen)
 }
 
 void mak_scan_reopen(int gen, const char *url, double duration_secs,
-                     const AVDictionary *net_opts)
+                     const AVDictionary *net_opts,
+                     const struct mak_scan_track *track)
 {
     if (mak_waveform_current_gen() != gen)
         return;
@@ -1014,6 +1040,7 @@ void mak_scan_reopen(int gen, const char *url, double duration_secs,
     args->url           = strdup(url);
     args->my_gen        = gen;
     args->duration_secs = duration_secs;
+    args->track         = *track;
     if (!args->url || (net_opts && av_dict_copy(&args->net_opts, net_opts, 0) < 0)) {
         av_dict_free(&args->net_opts);
         free(args->url);
@@ -1035,6 +1062,36 @@ void mak_scan_reopen(int gen, const char *url, double duration_secs,
 }
 
 /* ─── public entry point ─────────────────────────────────────────── */
+
+/* Fills [t] with what identifies [audio] among the streams of [demuxer]
+ * (see struct mak_scan_track). Returns false when [audio] is not one of
+ * them: a track of another source, an external audio file, that a re-open
+ * of the main URL does not carry. Core thread. */
+static bool scan_track_of(struct demuxer *demuxer, struct sh_stream *audio,
+                          struct mak_scan_track *t)
+{
+    *t = (struct mak_scan_track){
+        .lavf_index = -1, .mkv_id = -1, .ordinal = -1,
+    };
+    if (!demuxer || !audio)
+        return true;   /* nothing selected: the first audio stream */
+    int ordinal = 0;
+    for (int i = 0; i < demux_get_num_stream(demuxer); i++) {
+        struct sh_stream *sh = demux_get_stream(demuxer, i);
+        if (sh == audio) {
+            const char *name = demuxer->desc ? demuxer->desc->name : "";
+            t->ordinal = ordinal;
+            if (!strcmp(name, "lavf"))
+                t->lavf_index = audio->ff_index;
+            else if (!strcmp(name, "mkv"))
+                t->mkv_id = audio->demuxer_id;
+            return true;
+        }
+        if (sh->type == STREAM_AUDIO)
+            ordinal++;
+    }
+    return false;
+}
 
 void mak_scan_start(const char *url, double duration_secs,
                     const char *format_name, bool is_network,
@@ -1058,6 +1115,23 @@ void mak_scan_start(const char *url, double duration_secs,
     const char *pcm_sep = strstr(url, "://");
     if (pcm_sep && mak_url_scheme_is(url, pcm_sep, "mak-pcm")) {
         mak_waveform_arm_rolling(new_gen);
+        return;
+    }
+
+    /* ── EXTERNAL audio track: grown from playback, never re-opened ───────
+     * The player plays a track of another source (--audio-file): a re-open
+     * of [url] would analyze the main file's audio, and the cache feed
+     * refuses a stream of another demuxer. The waveform grows from playback
+     * like a stream's, and the loudness scan reports unavailable. */
+    struct mak_scan_track track;
+    if (!scan_track_of(demuxer, audio, &track)) {
+        if (log)
+            mp_verbose(log, "analysis: external audio track, the waveform "
+                       "grows from playback\n");
+        if (duration_secs > 0)
+            mak_waveform_arm_progressive(new_gen, duration_secs);
+        else
+            mak_waveform_arm_rolling(new_gen);
         return;
     }
 
@@ -1092,7 +1166,8 @@ void mak_scan_start(const char *url, double duration_secs,
     const char *sep = strstr(url, "://");
     if (is_network && sep && (mak_url_scheme_is(url, sep, "http") ||
                               mak_url_scheme_is(url, sep, "https")) &&
-        mak_feed_start(new_gen, demuxer, audio, duration_secs, url, global, log))
+        mak_feed_start(new_gen, demuxer, audio, duration_secs, url, &track,
+                       global, log))
         return;
 
     /* Local file, or a seekable HTTP byte-range part (direct-play): hand to the
@@ -1105,6 +1180,7 @@ void mak_scan_start(const char *url, double duration_secs,
     args->url           = strdup(url);
     args->my_gen        = new_gen;
     args->duration_secs = duration_secs;
+    args->track         = track;
     if (!args->url) { free(args); return; }
     /* Snapshot mpv's network options now, on the core thread: the current
      * values include this file's file-local ones (Media headers), and the

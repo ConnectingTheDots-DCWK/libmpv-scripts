@@ -25,6 +25,15 @@
 
 #include <stdbool.h>
 
+/* Which audio stream of the source the analysis decodes: the one the player
+ * plays, as the core knows it, for the coordinator to find again in its own
+ * open of the source. Each field is -1 when unknown. */
+struct mak_scan_track {
+    int lavf_index;  /* stream index, when mpv opened the source with lavf */
+    int mkv_id;      /* Matroska track number, with mpv's Matroska demuxer */
+    int ordinal;     /* position among the audio streams of the source */
+};
+
 /* Begin analysis for the just-loaded file. No-op if neither the waveform nor
  * the loudness gate is set, or if [url] is null/empty. Bumps the generation
  * counter so any in-flight coordinator/workers self-cancel.
@@ -61,7 +70,12 @@
  * A seekable network file whose [demuxer] keeps a seekable cache is not
  * re-opened at all: the analysis decodes [audio]'s packets from that cache
  * (mak_feed.h), so the file is downloaded once. [demuxer] and [audio] may be
- * NULL; the re-open then applies as before. */
+ * NULL; the re-open then applies as before.
+ *
+ * [audio] is the track the player plays: the re-open decodes the same
+ * stream of [url]. A track of another source (an external audio file) is not
+ * in [url]: its waveform grows from playback and the loudness scan reports
+ * unavailable. */
 struct mpv_global;
 struct mp_log;
 struct demuxer;
@@ -86,9 +100,11 @@ void mak_scan_thread_leave(void);
 
 /* Re-open [url] for generation [gen] with the coordinator, as mak_scan_start
  * does for a source it does not feed from the cache. For the cache-fed engine
- * when its pass cannot cover the file. Copies [url] and [net_opts]. */
+ * when its pass cannot cover the file. Copies [url], [net_opts] and [track]
+ * (the stream to decode). */
 struct AVDictionary;
 void mak_scan_reopen(int gen, const char *url, double duration_secs,
-                     const struct AVDictionary *net_opts);
+                     const struct AVDictionary *net_opts,
+                     const struct mak_scan_track *track);
 
 #endif
