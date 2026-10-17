@@ -27,11 +27,15 @@
 
 /* Which audio stream of the source the analysis decodes: the one the player
  * plays, as the core knows it, for the coordinator to find again in its own
- * open of the source. Each field is -1 when unknown. */
+ * open of the source. Each index is -1 when unknown. */
 struct mak_scan_track {
     int lavf_index;  /* stream index, when mpv opened the source with lavf */
     int mkv_id;      /* Matroska track number, with mpv's Matroska demuxer */
     int ordinal;     /* position among the audio streams of the source */
+    /* Where playback time starts in the source's timestamps: mpv's demuxer
+     * start time, which it subtracts from them (rebase-start-time, on by
+     * default). The analysis places samples on the same axis. */
+    double start_secs;
 };
 
 /* Begin analysis for the just-loaded file. No-op if neither the waveform nor

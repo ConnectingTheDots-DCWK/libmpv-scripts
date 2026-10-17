@@ -119,6 +119,9 @@ struct worker_chunk {
     int64_t  wave_end;
     int64_t  time_base_num;
     int64_t  time_base_den;
+    /* The source's timestamp at playback time 0, in samples (see
+     * mak_scan_track.start_secs): positions are timestamps less this. */
+    int64_t  start_samples;
     /* Output slice. total_bins is the global envelope size; the
      * worker writes only [bin_start, bin_end) — disjoint by
      * construction. out_min / out_max / out_sq / out_n point into the
@@ -358,7 +361,8 @@ static bool measure_pts_offset(AVFormatContext *fmt, AVCodecContext *dec,
         while (avcodec_receive_frame(dec, frame) >= 0) {
             bool ok = frame->pts != AV_NOPTS_VALUE && frame->nb_samples > 0;
             int64_t pos = ok ? av_rescale(frame->pts,
-                a->sample_rate * a->time_base_num, a->time_base_den) : 0;
+                a->sample_rate * a->time_base_num, a->time_base_den) -
+                a->start_samples : 0;
             int n = frame->nb_samples;
             av_frame_unref(frame);
             if (!ok)
@@ -494,8 +498,9 @@ static MP_THREAD_VOID worker_chunk_thread(void *p)
 reseek:
     if (a->sample_start > 0) {
         int64_t target = a->need_start - back + pts_offset;
-        int64_t seek_us = target > 0
-            ? target * 1000000 / a->sample_rate : 0;
+        /* The seek takes the source's own timestamps. */
+        int64_t from = (target > 0 ? target : 0) + a->start_samples;
+        int64_t seek_us = from > 0 ? from * 1000000 / a->sample_rate : 0;
         if (av_seek_frame(fmt, -1, seek_us, AVSEEK_FLAG_BACKWARD) < 0)
             goto cleanup;
         avcodec_flush_buffers(dec);
@@ -531,13 +536,15 @@ reseek:
             if (ret < 0) goto cleanup;
 
             /* Compute the absolute source-sample position of this
-             * frame from its PTS. After a backward seek the decoder
-             * re-emits frames before sample_start; the bin filter
-             * inside process_samples drops them. */
+             * frame from its PTS, on the playback axis (less the start
+             * time). After a backward seek the decoder re-emits frames
+             * before sample_start; the bin filter inside process_samples
+             * drops them. */
             int64_t frame_sample_pos;
             if (iframe->pts != AV_NOPTS_VALUE) {
                 frame_sample_pos = av_rescale(iframe->pts,
-                    a->sample_rate * a->time_base_num, a->time_base_den);
+                    a->sample_rate * a->time_base_num, a->time_base_den) -
+                    a->start_samples;
             } else if (!stream_pos_initialized) {
                 frame_sample_pos = a->sample_start;
             } else {
@@ -937,6 +944,11 @@ static MP_THREAD_VOID coordinator_main(void *p)
 
     int64_t total_samples = (int64_t)duration_us * sample_rate / 1000000;
     if (total_samples <= 0) goto fail;
+    /* A source whose timestamps start later (an MPEG-TS at 1.4 s or hours
+     * in, an Ogg cut from a stream) plays from time 0: the bins follow
+     * playback time, not the raw timestamps, or the envelope would sit
+     * late by the start time and lose its end past the axis. */
+    int64_t start_samples = llround(track.start_secs * sample_rate);
 
     /* Seekable complete file. Local paths, SMB shares and file:// URIs fan out
      * to all workers (disjoint regions decoded in parallel); a remote http(s)
@@ -1013,6 +1025,7 @@ static MP_THREAD_VOID coordinator_main(void *p)
             .wave_end      = w + 1 == nworkers ? total_samples : bin_next,
             .time_base_num = st->time_base.num,
             .time_base_den = st->time_base.den,
+            .start_samples = start_samples,
             .total_bins    = bins,
             .bin_start     = bs,
             .bin_end       = be,
@@ -1249,6 +1262,8 @@ static bool scan_track_of(struct demuxer *demuxer, struct sh_stream *audio,
 {
     *t = (struct mak_scan_track){
         .lavf_index = -1, .mkv_id = -1, .ordinal = -1,
+        .start_secs = demuxer && isfinite(demuxer->start_time)
+                    ? demuxer->start_time : 0,
     };
     if (!demuxer || !audio)
         return true;   /* nothing selected: the first audio stream */

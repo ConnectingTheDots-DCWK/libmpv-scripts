@@ -65,6 +65,7 @@ struct feed_args {
     AVCodecParameters *par;
     AVRational tb;
     int rate;                 /* source sample rate */
+    int64_t start;            /* timestamp of playback time 0, in samples */
     double duration_secs;
     int64_t total_samples;    /* the axis, as the bulk coordinator builds it */
     char *url;                /* for the re-open */
@@ -177,8 +178,10 @@ static bool fold_frame(struct feed_dec *d, struct feed_args *a, AVFrame *f)
      * placing each at its own would shift it by a few samples. */
     int64_t frame_pos;
     if (f->pts != AV_NOPTS_VALUE && a->tb.num > 0 && a->tb.den > 0)
+        /* The cached packets carry the file's own timestamps: the axis is
+         * playback time, which starts at the start time. */
         frame_pos = av_rescale(f->pts, (int64_t)a->rate * a->tb.num,
-                               a->tb.den);
+                               a->tb.den) - a->start;
     else
         frame_pos = d->pos_init ? d->emitted : 0;
     d->pos_init = true;
@@ -442,6 +445,7 @@ bool mak_feed_start(int gen, struct demuxer *demuxer, struct sh_stream *audio,
         mp_setup_av_network_options(&a->net_opts, NULL, global, log);
     a->tb = mp_get_codec_timebase(audio->codec);
     a->rate = par->sample_rate;
+    a->start = llround(track->start_secs * a->rate);
     a->duration_secs = duration_secs;
     a->total_samples = llround(duration_secs * 1e6) * a->rate / 1000000;
     a->feed = mak_demux_feed_attach(demuxer, audio);
