@@ -256,11 +256,11 @@ void mak_waveform_arm_progressive(int my_gen, double duration_secs)
 #define MAK_WAVE_ROLL_BIN_US   40000   /* 0.04 s, exact — no float rounding */
 #define MAK_WAVE_ROLL_BINS     131072
 
-/* Arm ROLLING mode for a true-live source (unknown duration). Unlike
- * PROGRESSIVE — which lays a fixed axis over a known total — this keeps a
- * sliding window of ABSOLUTE media-time bins, retained in lockstep with the
- * demuxer's seekable cache (mak_waveform_update_cache_range). The af-tap
- * grows it via mak_waveform_fold_samples, exactly as progressive does. */
+/* Arm the PROGRESSIVE envelope the cache-fed engine (mak_feed.c) grows
+ * through mak_waveform_fold_fed, with the af-tap fold off: the bulk
+ * resolution over the bulk axis, so a fed envelope equals the re-open's.
+ * Returns false, leaving the state as it is, when [my_gen] is stale, the
+ * duration or the rate is out of range, or an allocation fails. */
 bool mak_waveform_arm_fed(int my_gen, double duration_secs, int rate)
 {
     /* The whole file is decoded, so the bulk resolution applies: one bin per
@@ -352,6 +352,11 @@ bool mak_waveform_fed_abandon(int gen)
     return done;
 }
 
+/* Arm ROLLING mode for a true-live source (unknown duration). Unlike
+ * PROGRESSIVE, which lays a fixed axis over a known total, this keeps a
+ * sliding window of ABSOLUTE media-time bins, retained in lockstep with the
+ * demuxer's seekable cache (mak_waveform_update_cache_range). The af-tap
+ * grows it via mak_waveform_fold_samples, exactly as progressive does. */
 void mak_waveform_arm_rolling(int my_gen)
 {
     mp_mutex_lock(&g_wave_lock);

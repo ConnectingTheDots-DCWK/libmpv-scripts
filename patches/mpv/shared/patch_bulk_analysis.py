@@ -60,15 +60,18 @@ One coordinator + N workers. Coordinator owns the per-track
 join point for the workers. Workers write to disjoint slices of those
 arrays (no overlap by construction → no mutex on the hot path). Final
 commit to the visible `g_wave` state is done by the coordinator under
-`g_wave.lock`, only if the generation is still current.
+`g_wave_lock`, only if the generation is still current.
 
 Cancellation
 ============
 
 Detached coordinator (never joined). Each `start()` bumps a global
-generation counter; coordinator and workers carry their own gen and:
-  - exit early on the next 1024-sample boundary if their gen != the
-    current one,
+generation counter, and so does the close of the file while a scan
+runs; coordinator and workers carry their own gen and:
+  - exit once it is no longer the current one: a worker within
+    MAK_WAVE_CANCEL_CHECK_INTERVAL samples (4096, about 85 ms at
+    48 kHz), the coordinator at its next pass of the 100 ms publish
+    loop, a blocked open or read through the interrupt callback,
   - refuse to commit the final result if their gen is stale.
 
 This avoids blocking the mpv main thread on a still-decoding analysis
@@ -326,7 +329,7 @@ COMMAND_TABLE_PATCHED = (
 
 # Insert the getter/setter just before mp_property_audio_params (same
 # insertion point as patch_pcm_tap; we just prepend fresh functions).
-# The spliced block lives in bulk_analysis/command_insert.c and ENDS
+# The spliced block lives in bulk_analysis/waveform_command_insert.c and ENDS
 # with this anchor line, so the replace re-emits it.
 COMMAND_GETTER_ANCHOR = (
     'static int mp_property_audio_params(void *ctx, struct m_property *prop,'

@@ -68,11 +68,11 @@ struct mak_feed_replay {
  * it can walk the cache). Call on the core thread. Returns NULL, and the
  * caller re-opens the file instead, when the feed could not cover it whole:
  * no seekable cache, the cache on disk, a file known to be larger than the
- * forward cache, a timeline (EDL, ordered chapters), a cache range being
- * filled that does not start the file, or one holding more packets than the
- * replay is allowed to copy under the lock (a long file whose analysis is
- * enabled late). The demuxer cuts the feed later if its read-ahead stops
- * before the end, or if the cache of a file of unknown size fills up. A feed
+ * forward cache, a timeline (EDL, ordered chapters), or a cache range being
+ * filled that does not start the file. However long the cache already is,
+ * the consumer copies it a batch at a time (mak_demux_feed_replay). The
+ * demuxer cuts the feed later if its read-ahead stops before the end, or if
+ * the cache of a file of unknown size fills up. A feed
  * already attached to the demuxer is closed first. Packet timestamps are the
  * demuxer's own, before playback's start time offset, like the ones the bulk
  * decode reads from the file. */
