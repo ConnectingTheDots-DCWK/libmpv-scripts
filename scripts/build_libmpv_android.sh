@@ -833,6 +833,15 @@ android_mpv() {
   pushd "$bdir" >/dev/null
   # ── Apply the shared mpv patches (scripts/shared/_audio_only.sh) ─────────
   apply_mpv_patches_common "$dir"
+  # audiotrack (toggleable): fixes of mpv's default Android output, see
+  # patches/mpv/android/patch_audiotrack.py. ao_audiotrack.c is compiled on
+  # Android only, so the patch is applied here rather than from
+  # apply_mpv_patches_common.
+  if patch_on audiotrack; then
+    python3 "$LIBMPV_SCRIPTS_ROOT/patches/mpv/android/patch_audiotrack.py" "$dir"
+  else
+    warn "Skipping disabled patch: audiotrack"
+  fi
 
   # ── JNI bridge (Android-only) ────────────────────────────────────────────
   # Compile a tiny `.o` containing JNI_OnLoad → av_jni_set_java_vm and

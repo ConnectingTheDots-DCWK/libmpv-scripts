@@ -8,14 +8,14 @@ package main
 // user can turn on or off from Settings ▸ Patches. The ID matches the token the
 // build scripts check in DISABLED_PATCHES (see scripts/shared/_audio_only.sh).
 //
-// Only the "feature" and size-reduction patches are listed. Two of them act
-// on Windows only and are no-ops elsewhere: strip_win_resources and
-// timer_resolution. The per-platform build-correctness patches
-// (Apple/iOS/Windows/Android fixups, rubberband, libplacebo) and the
-// structural patch_optional_deps are always applied and aren't
-// user-toggleable, so they're not listed here. Everything listed is freely
-// toggleable: the build's config audit adapts to the selection, so no entry
-// needs to be locked.
+// Only the "feature" and size-reduction patches are listed. Three of them act
+// on one platform only and are no-ops elsewhere: strip_win_resources and
+// timer_resolution on Windows, audiotrack on Android. The per-platform
+// build-correctness patches (Apple/iOS/Windows/Android fixups, rubberband,
+// libplacebo) and the structural patch_optional_deps are always applied and
+// aren't user-toggleable, so they're not listed here. Everything listed is
+// freely toggleable: the build's config audit adapts to the selection, so no
+// entry needs to be locked.
 type PatchItem struct {
 	ID        string // token in DISABLED_PATCHES, e.g. "pcm_tap"
 	Title     string
@@ -63,6 +63,7 @@ func patchesCatalog() []PatchItem {
 		{ID: "playlist_prev_dos_path", Title: "playlist-prev-playlist on Windows paths", Desc: "Build the playlist-path prefixes as copies, so playlist-prev-playlist does not touch freed memory on Windows", Category: "mpv runtime", DefaultOn: true},
 		{ID: "chapter_list_reset", Title: "Current chapter after a new chapter-list", Desc: "Forget the last chapter seek when chapter-list is set, so a shorter list does not leave chapter past its end or make chapter-metadata read beyond it (a crash)", Category: "mpv runtime", DefaultOn: true},
 		{ID: "timer_resolution", Title: "Windows timer-resolution fix", Desc: "Stop mpv pinning the system-wide 1 ms timer at init (it fights DWM frame-pacing → host UI micro-stutter). No-op on non-Windows targets.", Category: "mpv runtime", DefaultOn: true},
+		{ID: "audiotrack", Title: "Android AudioTrack output fixes", Desc: "Fix mpv's default Android output: the thread waits instead of spinning when there is nothing to play, and audio-stream-silence feeds silence. No-op on non-Android targets.", Category: "mpv runtime", DefaultOn: true},
 
 		// ── FFmpeg (applied via apply_ffmpeg_patches) ───────────────────────
 		{ID: "libsmb2", Title: "SMB2 / NAS playback", Desc: "Adds the libsmb2 protocol (Samba/NAS)", Category: "FFmpeg", DefaultOn: true},
