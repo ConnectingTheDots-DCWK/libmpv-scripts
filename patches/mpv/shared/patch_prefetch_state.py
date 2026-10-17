@@ -34,7 +34,7 @@ States
     used     — a transition into the prefetched stream just happened
                (the "Using prefetched/prefetching URL." code path). The
                state PERSISTS at `used` until the next prefetch_next (or
-               a cancel) naturally clears it — back-to-back used→idle
+               going idle) naturally clears it — back-to-back used→idle
                would be coalesced by mpv's property-change queue and the
                observer would never see the `used` value.
     failed   — opener thread completed but the demuxer creation failed
@@ -42,8 +42,8 @@ States
                soon as the opener returns, while the current file still
                plays. Same persistence model as `used`: the state holds
                at `failed` until the next prefetch_next (loading) or
-               cancel naturally clears it, so observers reliably see the
-               failure event.
+               going idle naturally clears it, so observers reliably see
+               the failure event.
 
 Transitions wired
 =================
@@ -55,8 +55,8 @@ Transitions wired
       ├─ "Using prefetched" branch  → used (persists)
       ├─ "Prefetched URL failed"    → failed (persists)
       ├─ "Aborting…" / "Dropping…"  → idle
-      └─ cancel path                → idle
-    cancel_open()                   → idle (unless already `failed`)
+      └─ cancel path                → idle (unless already `failed`)
+    mp_play_files() going idle      → idle (cancel_open drops the prefetch)
 
 Files patched
 =============
@@ -215,7 +215,7 @@ def patch_command_c(path):
 
 # ─── loadfile.c ────────────────────────────────────────────────────────
 #
-# We add a helper near the top of the file and invoke it at five call
+# We add a helper near the top of the file and invoke it at six call
 # sites. Anchoring on the exact pristine strings lets us fail loud if
 # upstream refactors any of them.
 
@@ -233,7 +233,7 @@ LOADFILE_HELPER_INSERT = LOADFILE_HELPER_ANCHOR + '\n\n' + (
     ' * Must only be called from the core thread — mp_notify_property\n'
     ' * touches the client event queue and is not thread-safe against\n'
     ' * concurrent writers. All documented call sites satisfy this: they\n'
-    ' * live in prefetch_next, open_demux_reentrant, cancel_open, and\n'
+    ' * live in prefetch_next, open_demux_reentrant, mp_play_files, and\n'
     ' * the polling hook invoked from handle_update_cache. */\n'
     'static void mak_set_prefetch_state(struct MPContext *mpctx, int state)\n'
     '{\n'
@@ -312,8 +312,8 @@ LOADFILE_CALL_SITES = [
     #    mpv coalesces rapid property changes (observers read the
     #    current value on wake-up), so back-to-back used→idle would
     #    hide the `used` event entirely. Instead we let `used` persist
-    #    until the next prefetch_next (loading) or cancel_open (idle)
-    #    naturally clears it.
+    #    until the next prefetch_next (loading) or going idle naturally
+    #    clears it.
     (
         'MP_VERBOSE(mpctx, "Using prefetched/prefetching URL.\\n");',
         'MP_VERBOSE(mpctx, "Using prefetched/prefetching URL.\\n");\n'
@@ -350,6 +350,22 @@ LOADFILE_CALL_SITES = [
         '                mak_set_prefetch_state(mpctx, 0 /* idle */);\n'
         '        }\n'
         '    }',
+    ),
+    # 5. mp_play_files going idle (stop, end of playlist, playlist-clear):
+    #    upstream keeps the prefetched demuxer open in idle and nothing
+    #    else resets the state, so `loading` or `ready` and the cache
+    #    duration lingered until the next open. Drop the prefetch and go
+    #    idle. Upstream reuses the prefetch when the same URL is opened
+    #    after a stop; that open now starts from scratch.
+    (
+        '        mpctx->stop_play = new_entry ? PT_NEXT_ENTRY : PT_STOP;\n',
+        '        mpctx->stop_play = new_entry ? PT_NEXT_ENTRY : PT_STOP;\n'
+        '        /* ' + MARKER + ' ─── going idle: drop the prefetch, so no\n'
+        '         * demuxer stays open in idle and prefetch-state reads idle. */\n'
+        '        if (!new_entry) {\n'
+        '            cancel_open(mpctx);\n'
+        '            mak_set_prefetch_state(mpctx, 0 /* idle */);\n'
+        '        }\n',
     ),
 ]
 
