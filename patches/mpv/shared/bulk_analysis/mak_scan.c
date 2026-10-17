@@ -1177,9 +1177,12 @@ cleanup:
     MP_THREAD_RETURN();
 }
 
-/* The loudness patch weaves its include in after this point; the re-open's
- * own failure paths must settle the scan too, with or without it. */
-static void reopen_failed(int gen)
+/* Settles generation [gen] as failed, the loudness scan with it: for the
+ * failure paths of the start and the re-open, which would otherwise leave
+ * the waveform on decoding and the loudness on scanning until the next
+ * file. The loudness patch weaves its include in after this point, so this
+ * holds with or without it. */
+static void scan_failed(int gen)
 {
     mak_waveform_mark_failed(gen);
 #if __has_include("audio/mak_loudness.h")
@@ -1206,8 +1209,10 @@ void mak_scan_reopen(int gen, const char *url, double duration_secs,
     if (mak_waveform_current_gen() != gen)
         return;
     struct coord_args *args = calloc(1, sizeof(*args));
-    if (!args)
+    if (!args) {
+        scan_failed(gen);
         return;
+    }
     args->url           = strdup(url);
     args->my_gen        = gen;
     args->duration_secs = duration_secs;
@@ -1217,7 +1222,7 @@ void mak_scan_reopen(int gen, const char *url, double duration_secs,
         av_dict_free(&args->net_opts);
         free(args->url);
         free(args);
-        reopen_failed(gen);
+        scan_failed(gen);
         return;
     }
     mp_thread t;
@@ -1227,7 +1232,7 @@ void mak_scan_reopen(int gen, const char *url, double duration_secs,
         av_dict_free(&args->net_opts);
         free(args->url);
         free(args);
-        reopen_failed(gen);
+        scan_failed(gen);
         return;
     }
     mp_thread_detach(t);
@@ -1407,6 +1412,7 @@ void mak_scan_start(const char *url, double duration_secs,
     struct coord_args *args = calloc(1, sizeof(*args));
     if (!args) {
         scan_close_fd(fd);
+        scan_failed(new_gen);
         return;
     }
     args->url           = strdup(url);
@@ -1417,6 +1423,7 @@ void mak_scan_start(const char *url, double duration_secs,
     if (!args->url) {
         scan_close_fd(fd);
         free(args);
+        scan_failed(new_gen);
         return;
     }
     /* Snapshot mpv's network options now, on the core thread: the current
