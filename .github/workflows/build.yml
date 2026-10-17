@@ -287,3 +287,24 @@ jobs:
               echo "PipeWire or PulseAudio present in the image" >&2; exit 1
             fi
             builds/audio_fallback_test builds/release/libmpv_linux-x86_64.so /tmp/tone.wav'
+
+  # The TUI's go vet and go test, and the bash check of the L13 exit code
+  # classification. Not in the needs of release: a red test here does not
+  # hold back the binaries, it only shows next to them.
+  tui:
+    name: TUI and verify tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: tui/go.mod
+          cache-dependency-path: tui/go.sum
+      - name: go vet
+        working-directory: tui
+        run: go vet ./...
+      - name: go test
+        working-directory: tui
+        run: go test ./...
+      - name: L13 exit code classification
+        run: bash verify/tests/l13_windows_test.sh
