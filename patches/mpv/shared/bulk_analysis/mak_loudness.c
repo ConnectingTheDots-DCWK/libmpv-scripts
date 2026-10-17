@@ -308,9 +308,11 @@ int mak_loud_worker_feed(struct mak_loud_worker *w,
         w->buf = grown;
         w->buf_capacity = new_cap;
     }
+    /* extended_data: data[] holds the first 8 planes only, and the scan
+     * takes up to MAK_LOUD_MAX_CH channels. */
     uint8_t *out_data[1] = { (uint8_t *)w->buf };
     int converted = swr_convert(w->swr, out_data, w->buf_capacity,
-                                (const uint8_t **)frame->data,
+                                (const uint8_t **)frame->extended_data,
                                 frame->nb_samples);
     if (converted < 0) { w->failed = true; return -1; }
 

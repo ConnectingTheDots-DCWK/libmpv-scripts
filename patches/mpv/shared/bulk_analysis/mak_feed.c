@@ -218,9 +218,10 @@ static bool fold_frame(struct feed_dec *d, struct feed_args *a, AVFrame *f)
         d->cap = cap;
         d->buf_channels = channels;
     }
+    /* extended_data: data[] holds the first 8 planes only. */
     uint8_t *out[1] = { (uint8_t *)d->buf };
-    int n = swr_convert(d->swr, out, d->cap, (const uint8_t **)f->data,
-                        f->nb_samples);
+    int n = swr_convert(d->swr, out, d->cap,
+                        (const uint8_t **)f->extended_data, f->nb_samples);
     if (n <= 0)
         return n == 0;
     d->emitted = pos;

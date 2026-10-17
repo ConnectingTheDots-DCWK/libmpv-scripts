@@ -418,9 +418,11 @@ reseek:
                 mono_buf = grown;
                 out_buf_capacity = new_cap;
             }
+            /* extended_data: data[] holds the first 8 planes only, and a
+             * planar frame has one per channel (16 for a 16-channel Opus). */
             uint8_t *out_data[1] = { (uint8_t *)out_buf };
             int converted = swr_convert(swr, out_data, out_buf_capacity,
-                (const uint8_t **)iframe->data, iframe->nb_samples);
+                (const uint8_t **)iframe->extended_data, iframe->nb_samples);
             av_frame_unref(iframe);
             if (converted <= 0) continue;
 
