@@ -24,63 +24,77 @@ import sys, os, re, shutil
 MARKER = 'MAK_LIBSMB2_PATCH_V1'
 
 
+def replace_once(text, anchor, new, path):
+    """Replaces the one occurrence of anchor, or raises: a missing or
+    repeated anchor means the FFmpeg layout changed, and a silent no-op
+    would build without SMB."""
+    count = text.count(anchor)
+    if count != 1:
+        raise RuntimeError(
+            'Expected exactly 1 %r in %s, found %d (ffmpeg layout changed?)'
+            % (anchor, path, count))
+    return text.replace(anchor, new)
+
+
+# Each patch_* returns the new text, or None when the file is already
+# patched. main() writes the files only once every anchor has matched, so a
+# missing one leaves the tree as it was.
 def patch_configure(path):
     with open(path) as f:
         text = f.read()
 
     if MARKER in text:
         print(f'Already patched: {path}')
-        return
+        return None
 
     # 1. Add help text after the libsmbclient line.
-    text = text.replace(
-        '  --enable-libsmbclient    enable Samba protocol via libsmbclient [no]',
-        '  --enable-libsmbclient    enable Samba protocol via libsmbclient [no]\n'
-        '  --enable-libsmb2         enable SMB2/3 protocol via libsmb2 [no]'
-    )
+    help_line = '  --enable-libsmbclient    enable Samba protocol via libsmbclient [no]'
+    text = replace_once(
+        text, help_line,
+        help_line + '\n'
+        '  --enable-libsmb2         enable SMB2/3 protocol via libsmb2 [no]',
+        path)
 
-    # 2. Add libsmb2 to EXTERNAL_LIBRARY_LIST (NOT GPL — libsmb2 is LGPL)
-    #    Insert after the line containing 'libsmbclient' inside
-    #    EXTERNAL_LIBRARY_GPLV3_LIST, but we need the NON-GPL list.
-    #    Find the EXTERNAL_LIBRARY_LIST block and add libsmb2.
-    #    The safest approach: add it right after 'libshine' or similar entry
-    #    that is in EXTERNAL_LIBRARY_LIST (not GPL).
-    # Add libsmb2 to EXTERNAL_LIBRARY_LIST (NOT GPL — libsmb2 is LGPL)
+    # 2. Add libsmb2 to EXTERNAL_LIBRARY_LIST (NOT GPL — libsmb2 is LGPL),
+    #    right after 'libshine', which is in that list and not in a GPL one.
     if '    libsmb2\n' not in text:
-        text = text.replace(
-            '    libshine\n',
-            '    libshine\n    libsmb2\n'
-        )
+        text = replace_once(text, '    libshine\n', '    libshine\n    libsmb2\n', path)
 
     # 3. Add protocol dependency (NOT gpl — this is the key difference).
     #    The MARKER bash comment alongside the dep declaration is what the
     #    early-return at the top of patch_configure() greps for.
     smbclient_dep = 'libsmbclient_protocol_deps="libsmbclient gplv3"'
     if 'libsmb2_protocol_deps' not in text:
-        text = text.replace(
-            smbclient_dep,
+        text = replace_once(
+            text, smbclient_dep,
             smbclient_dep + '\n# ' + MARKER + '\n' +
-            'libsmb2_protocol_deps="libsmb2"'
-        )
+            'libsmb2_protocol_deps="libsmb2"',
+            path)
 
     # 4. Add pkg-config check after the libsmbclient check
     smbclient_check = 'enabled libsmbclient'
-    idx = text.find(smbclient_check)
-    if idx != -1 and 'enabled libsmb2' not in text:
+    if 'enabled libsmb2' not in text:
+        count = text.count(smbclient_check)
+        if count != 1:
+            raise RuntimeError(
+                'Expected exactly 1 %r in %s, found %d (ffmpeg layout changed?)'
+                % (smbclient_check, path, count))
+        idx = text.find(smbclient_check)
         # Find the end of the libsmbclient check block (next blank line or next 'enabled')
         end_idx = text.find('\n\n', idx)
         if end_idx == -1:
             end_idx = text.find('\nenabled ', idx + len(smbclient_check))
-        if end_idx != -1:
-            insert = ('\nenabled libsmb2           && { check_pkg_config libsmb2 libsmb2 '
-                      'smb2/libsmb2.h smb2_init_context ||\n'
-                      '                               require libsmb2 smb2/libsmb2.h '
-                      'smb2_init_context -lsmb2; }')
-            text = text[:end_idx] + insert + text[end_idx:]
+        if end_idx == -1:
+            raise RuntimeError(
+                'End of the libsmbclient check block not found in %s '
+                '(ffmpeg layout changed?)' % path)
+        insert = ('\nenabled libsmb2           && { check_pkg_config libsmb2 libsmb2 '
+                  'smb2/libsmb2.h smb2_init_context ||\n'
+                  '                               require libsmb2 smb2/libsmb2.h '
+                  'smb2_init_context -lsmb2; }')
+        text = text[:end_idx] + insert + text[end_idx:]
 
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f"Patched: {path}")
+    return text
 
 
 def patch_makefile(path):
@@ -89,18 +103,19 @@ def patch_makefile(path):
 
     if 'CONFIG_LIBSMB2_PROTOCOL' in text:
         print(f"Already patched: {path}")
-        return
+        return None
 
     # Add after libsmbclient line (use regex for flexible whitespace)
-    text = re.sub(
+    text, count = re.subn(
         r'(OBJS-\$\(CONFIG_LIBSMBCLIENT_PROTOCOL\)\s+\+= libsmbclient\.o)',
         r'\1\nOBJS-$(CONFIG_LIBSMB2_PROTOCOL)              += libsmb2.o',
         text
     )
-
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f"Patched: {path}")
+    if count != 1:
+        raise RuntimeError(
+            'Expected exactly 1 libsmbclient.o OBJS line in %s, found %d '
+            '(ffmpeg Makefile layout changed?)' % (path, count))
+    return text
 
 
 def patch_protocols(path):
@@ -109,18 +124,15 @@ def patch_protocols(path):
 
     if 'ff_libsmb2_protocol' in text:
         print(f"Already patched: {path}")
-        return
+        return None
 
     # Add extern declaration after libsmbclient
-    text = text.replace(
+    return replace_once(
+        text,
         'extern const URLProtocol ff_libsmbclient_protocol;',
         'extern const URLProtocol ff_libsmbclient_protocol;\n'
-        'extern const URLProtocol ff_libsmb2_protocol;'
-    )
-
-    with open(path, 'w') as f:
-        f.write(text)
-    print(f"Patched: {path}")
+        'extern const URLProtocol ff_libsmb2_protocol;',
+        path)
 
 
 def main():
@@ -130,10 +142,22 @@ def main():
 
     ffmpeg_dir = sys.argv[1]
     libsmb2_c = sys.argv[2]
+    if not os.path.isfile(libsmb2_c):
+        raise RuntimeError('libsmb2.c not found: %s' % libsmb2_c)
 
-    patch_configure(os.path.join(ffmpeg_dir, 'configure'))
-    patch_makefile(os.path.join(ffmpeg_dir, 'libavformat', 'Makefile'))
-    patch_protocols(os.path.join(ffmpeg_dir, 'libavformat', 'protocols.c'))
+    edits = []
+    for patch, rel in ((patch_configure, ('configure',)),
+                       (patch_makefile, ('libavformat', 'Makefile')),
+                       (patch_protocols, ('libavformat', 'protocols.c'))):
+        path = os.path.join(ffmpeg_dir, *rel)
+        text = patch(path)
+        if text is not None:
+            edits.append((path, text))
+
+    for path, text in edits:
+        with open(path, 'w') as f:
+            f.write(text)
+        print(f"Patched: {path}")
 
     # Copy libsmb2.c into libavformat/
     dest = os.path.join(ffmpeg_dir, 'libavformat', 'libsmb2.c')
