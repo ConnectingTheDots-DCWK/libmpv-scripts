@@ -11,12 +11,22 @@
  * (optional — this file compiles and links standalone without it).
  *
  * See patch_bulk_analysis.py for benchmark numbers and the design rationale. */
+#include <errno.h>
+#include <limits.h>
 #include <math.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#define MAK_SCAN_FD_IO 1
+#else
+#define MAK_SCAN_FD_IO 0
+#endif
 
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -88,6 +98,9 @@ struct worker_chunk {
      * worker does not publish live, e.g. a future caller that omits it). */
     struct mak_wave_hw *hwslot;
     const char *url;             /* shared, owned by coordinator */
+    /* The coordinator's duplicate of an fd://N source, read with pread
+     * (see open_source), or -1 to open [url]. */
+    int      fd;
     /* mpv's network options for the re-open (shared, read-only, owned by the
      * coordinator; NULL for a local path). */
     const AVDictionary *net_opts;
@@ -172,26 +185,142 @@ static void process_samples(const float *samples, int count,
  * callback (defined below, just before coordinator_main). */
 static int coord_interrupt_cb(void *opaque);
 
+/* ─── descriptor sources ──────────────────────────────────────────────
+ * An fd://N or fdclose://N URL (how an Android content:// URI reaches mpv)
+ * names a descriptor mpv reads with its own stream layer; FFmpeg cannot
+ * open it. mak_scan_start duplicates N on the core thread, and every
+ * context here reads the duplicate through an AVIOContext of its own, with
+ * pread at a private position: mpv reads N with read and lseek, and a
+ * duplicate shares that offset, which a plain read here would move under
+ * playback. */
+#define MAK_FD_IO_BUF 32768
+
+struct fd_io {
+    int     fd;
+    int64_t pos;
+};
+
+#if MAK_SCAN_FD_IO
+static int fd_io_read(void *opaque, uint8_t *buf, int len)
+{
+    struct fd_io *io = opaque;
+    ssize_t r;
+    do {
+        r = pread(io->fd, buf, len, io->pos);
+    } while (r < 0 && errno == EINTR);
+    if (r < 0)
+        return AVERROR(errno);
+    if (r == 0)
+        return AVERROR_EOF;
+    io->pos += r;
+    return (int)r;
+}
+
+static int64_t fd_io_seek(void *opaque, int64_t offset, int whence)
+{
+    struct fd_io *io = opaque;
+    struct stat st;
+    switch (whence & ~AVSEEK_FORCE) {
+    case AVSEEK_SIZE:
+        return fstat(io->fd, &st) < 0 ? AVERROR(errno) : st.st_size;
+    case SEEK_SET:
+        break;
+    case SEEK_CUR:
+        offset += io->pos;
+        break;
+    case SEEK_END:
+        if (fstat(io->fd, &st) < 0)
+            return AVERROR(errno);
+        offset += st.st_size;
+        break;
+    default:
+        return AVERROR(EINVAL);
+    }
+    if (offset < 0)
+        return AVERROR(EINVAL);
+    io->pos = offset;
+    return offset;
+}
+#endif
+
+/* Closes the duplicate mak_scan_start took of a descriptor source. */
+static void scan_close_fd(int fd)
+{
+#if MAK_SCAN_FD_IO
+    if (fd >= 0)
+        close(fd);
+#else
+    (void)fd;
+#endif
+}
+
+/* Frees an AVIOContext open_source made for a descriptor. */
+static void free_fd_io(AVIOContext *pb)
+{
+    if (!pb)
+        return;
+    av_freep(&pb->buffer);
+    av_freep(&pb->opaque);
+    avio_context_free(&pb);
+}
+
+/* Closes [*fmt], and the descriptor reader open_source gave it: with a
+ * caller's AVIOContext, avformat_close_input leaves it open. */
+static void close_source(AVFormatContext **fmt)
+{
+    AVIOContext *pb = *fmt && ((*fmt)->flags & AVFMT_FLAG_CUSTOM_IO)
+                    ? (*fmt)->pb : NULL;
+    avformat_close_input(fmt);
+    free_fd_io(pb);
+}
+
 /* Open [url] into the pre-allocated [*fmt] with mpv's own network options
  * ([net_opts], NULL for a local path: tls-verify, CA file, headers, user
  * agent, cookies...) so the re-open verifies and authenticates exactly like
  * playback does. FFmpeg's own defaults would skip certificate verification
  * and drop the headers. The 5 s I/O timeout then overrides mpv's
- * network-timeout, bounding a stalled connection as before. */
-static int open_source(AVFormatContext **fmt, const char *url,
+ * network-timeout, bounding a stalled connection as before. With [fd] >= 0
+ * the source is that descriptor, read with pread (see above), and [url]
+ * only names it. Close with close_source. */
+static int open_source(AVFormatContext **fmt, const char *url, int fd,
                        const AVDictionary *net_opts)
 {
+    AVIOContext *pb = NULL;
+#if MAK_SCAN_FD_IO
+    if (fd >= 0) {
+        struct fd_io *io = av_mallocz(sizeof(*io));
+        unsigned char *buf = av_malloc(MAK_FD_IO_BUF);
+        pb = io && buf ? avio_alloc_context(buf, MAK_FD_IO_BUF, 0, io,
+                                            fd_io_read, NULL, fd_io_seek)
+                       : NULL;
+        if (!pb) {
+            av_free(buf);
+            av_free(io);
+            avformat_free_context(*fmt);
+            *fmt = NULL;
+            return AVERROR(ENOMEM);
+        }
+        io->fd = fd;
+        pb->seekable = AVIO_SEEKABLE_NORMAL;
+        (*fmt)->pb = pb;
+        (*fmt)->flags |= AVFMT_FLAG_CUSTOM_IO;
+    }
+#endif
     AVDictionary *opts = NULL;
     if (net_opts && av_dict_copy(&opts, net_opts, 0) < 0) {
         av_dict_free(&opts);
         avformat_free_context(*fmt);
         *fmt = NULL;
+        free_fd_io(pb);
         return AVERROR(ENOMEM);
     }
     av_dict_set(&opts, "rw_timeout", "5000000", 0);  /* 5 s (microseconds) */
     av_dict_set(&opts, "timeout",    "5000000", 0);  /* 5 s (HTTP/TCP) */
     int ret = avformat_open_input(fmt, url, NULL, &opts);
     av_dict_free(&opts);
+    /* A failed open frees the context but not a caller's AVIOContext. */
+    if (ret < 0)
+        free_fd_io(pb);
     return ret;
 }
 
@@ -301,7 +430,7 @@ static MP_THREAD_VOID worker_chunk_thread(void *p)
     if (!fmt) goto cleanup;
     fmt->interrupt_callback.callback = coord_interrupt_cb;
     fmt->interrupt_callback.opaque   = &a->my_gen;
-    if (open_source(&fmt, a->url, a->net_opts) < 0) goto cleanup;
+    if (open_source(&fmt, a->url, a->fd, a->net_opts) < 0) goto cleanup;
     if (avformat_find_stream_info(fmt, NULL) < 0)          goto cleanup;
 
     const AVCodec *codec = avcodec_find_decoder(a->codec_id);
@@ -501,7 +630,7 @@ cleanup:
     if (swr)      swr_free(&swr);
     av_channel_layout_uninit(&swr_layout);
     if (dec)      avcodec_free_context(&dec);
-    if (fmt)      avformat_close_input(&fmt);
+    if (fmt)      close_source(&fmt);
     /* Liveness for the coordinator's publish loop, on every exit path (normal,
      * EOF, error, cancel). RELEASE so the coordinator's ACQUIRE of `done` also
      * observes this worker's final hw store and all its bin writes. */
@@ -518,6 +647,7 @@ struct coord_args {
     double duration_secs; /* caller's (mpv's) duration — PROGRESSIVE axis */
     AVDictionary *net_opts; /* mpv's network options; coordinator owns */
     struct mak_scan_track track; /* the audio stream the player plays */
+    int    fd;           /* duplicate of an fd://N source, or -1; owned */
 };
 
 /* Abort a coordinator's blocking probe (avformat_open_input /
@@ -688,6 +818,8 @@ static MP_THREAD_VOID coordinator_main(void *p)
     /* Shared read-only with the workers, freed in cleanup after they join. */
     AVDictionary *net_opts = args->net_opts;
     struct mak_scan_track track = args->track;
+    /* Shared with the workers like [url], closed in cleanup. */
+    int fd = args->fd;
     free(args);
 
     AVFormatContext   *probe_fmt = NULL;
@@ -725,7 +857,17 @@ static MP_THREAD_VOID coordinator_main(void *p)
     if (!probe_fmt) goto fail;
     probe_fmt->interrupt_callback.callback = coord_interrupt_cb;
     probe_fmt->interrupt_callback.opaque   = &my_gen;
-    if (open_source(&probe_fmt, url, net_opts) < 0) goto fail;
+    int open_ret = open_source(&probe_fmt, url, fd, net_opts);
+    if (open_ret < 0) {
+        /* Logged through FFmpeg's log, which mpv routes from any thread:
+         * this detached thread may outlive the core and its log. Not for a
+         * probe a newer generation interrupted. */
+        if (mak_waveform_current_gen() == my_gen)
+            av_log(NULL, AV_LOG_WARNING, "analysis: cannot open the source "
+                   "(%s), the waveform and loudness scan fail\n",
+                   av_err2str(open_ret));
+        goto fail;
+    }
     if (avformat_find_stream_info(probe_fmt, NULL) < 0)       goto fail;
 
     audio_idx = pick_audio_stream(probe_fmt, &track);
@@ -769,7 +911,8 @@ static MP_THREAD_VOID coordinator_main(void *p)
                        (probe_fmt->pb &&
                         !(probe_fmt->pb->seekable & AVIO_SEEKABLE_NORMAL));
     const char *scheme_sep = strstr(url, "://");
-    bool is_network  = scheme_sep != NULL;
+    /* A descriptor source reads a local file, like a path. */
+    bool is_network  = scheme_sep != NULL && fd < 0;
     /* A complete seekable file fans out to all workers unless re-opening it N
      * times is unsafe. SMB shares (smb:// and libsmb2's smb2://) and file://
      * URIs are plain files that serve concurrent reads at disjoint offsets just
@@ -857,6 +1000,7 @@ static MP_THREAD_VOID coordinator_main(void *p)
             .abort         = &abort_workers,
             .hwslot        = &hw[w],
             .url           = url,
+            .fd            = fd,
             .net_opts      = net_opts,
             .audio_idx     = audio_idx,
             .codec_id      = st->codecpar->codec_id,
@@ -1009,7 +1153,8 @@ cleanup:
     if (bins_sq) av_free(bins_sq);
     if (bins_n) av_free(bins_n);
     if (bins_filled) av_free(bins_filled);
-    if (probe_fmt) avformat_close_input(&probe_fmt);
+    if (probe_fmt) close_source(&probe_fmt);
+    scan_close_fd(fd);
     av_dict_free(&net_opts);
     free(url);
     /* Last touch of shared state: a drain waiting on this count may let the
@@ -1041,6 +1186,7 @@ void mak_scan_reopen(int gen, const char *url, double duration_secs,
     args->my_gen        = gen;
     args->duration_secs = duration_secs;
     args->track         = *track;
+    args->fd            = -1;   /* the cache feed takes network files only */
     if (!args->url || (net_opts && av_dict_copy(&args->net_opts, net_opts, 0) < 0)) {
         av_dict_free(&args->net_opts);
         free(args->url);
@@ -1093,6 +1239,37 @@ static bool scan_track_of(struct demuxer *demuxer, struct sh_stream *audio,
     return false;
 }
 
+#if MAK_SCAN_FD_IO
+/* A duplicate of the descriptor an fd://N or fdclose://N URL names ([num]
+ * is the text after "://"), taken on the core thread while N is the
+ * player's file: the app may close N while the analysis runs, and the
+ * number be reused by another open. -1, with a warning, when the source
+ * cannot be read ahead of time: N is not an open descriptor, or not a
+ * regular file (a pipe from a cloud provider). */
+static int scan_dup_fd(const char *num, struct mp_log *log)
+{
+    char *end = NULL;
+    errno = 0;
+    long n = strtol(num, &end, 0);   /* as mpv's stream_file parses it */
+    struct stat st;
+    const char *why = NULL;
+    if (errno || !end || end == num || *end || n < 0 || n > INT_MAX)
+        why = "not a descriptor number";
+    else if (fstat((int)n, &st) < 0)
+        why = "not an open descriptor";
+    else if (!S_ISREG(st.st_mode))
+        why = "not a regular file";
+    int fd = why ? -1 : fcntl((int)n, F_DUPFD_CLOEXEC, 0);
+    if (!why && fd < 0)
+        why = "cannot be duplicated";
+    if (why && log)
+        mp_warn(log, "analysis: the descriptor source is %s, the waveform "
+                "grows from playback and the loudness scan is unavailable\n",
+                why);
+    return fd;
+}
+#endif
+
 void mak_scan_start(const char *url, double duration_secs,
                     const char *format_name, bool is_network,
                     bool seekable, struct mpv_global *global,
@@ -1133,6 +1310,32 @@ void mak_scan_start(const char *url, double duration_secs,
         else
             mak_waveform_arm_rolling(new_gen);
         return;
+    }
+
+    /* ── DESCRIPTOR (fd://N, fdclose://N: an Android content:// URI) ──────
+     * FFmpeg cannot open these URLs. The coordinator and its workers read a
+     * duplicate of N, taken here, with pread (see open_source). A source
+     * that cannot be read ahead of time (a pipe, or a platform without
+     * pread) grows from playback, and the loudness scan reports
+     * unavailable. */
+    int fd = -1;
+    const char *fd_sep = strstr(url, "://");
+    if (fd_sep && (mak_url_scheme_is(url, fd_sep, "fd") ||
+                   mak_url_scheme_is(url, fd_sep, "fdclose"))) {
+#if MAK_SCAN_FD_IO
+        fd = scan_dup_fd(fd_sep + 3, log);
+#else
+        if (log)
+            mp_warn(log, "analysis: a descriptor source is not decoded ahead "
+                    "of time here, the waveform grows from playback\n");
+#endif
+        if (fd < 0) {
+            if (duration_secs > 0)
+                mak_waveform_arm_progressive(new_gen, duration_secs);
+            else
+                mak_waveform_arm_rolling(new_gen);
+            return;
+        }
     }
 
     /* ── NETWORK adaptive / non-seekable: arm DIRECTLY, never re-open ──────
@@ -1176,24 +1379,33 @@ void mak_scan_start(const char *url, double duration_secs,
      * the coordinator's own classification. Re-opening here is safe — a local
      * or static file has no transcode to kill. */
     struct coord_args *args = calloc(1, sizeof(*args));
-    if (!args) return;
+    if (!args) {
+        scan_close_fd(fd);
+        return;
+    }
     args->url           = strdup(url);
     args->my_gen        = new_gen;
     args->duration_secs = duration_secs;
     args->track         = track;
-    if (!args->url) { free(args); return; }
+    args->fd            = fd;
+    if (!args->url) {
+        scan_close_fd(fd);
+        free(args);
+        return;
+    }
     /* Snapshot mpv's network options now, on the core thread: the current
      * values include this file's file-local ones (Media headers), and the
      * detached coordinator must not read the core's config later. Keyed on
      * the URL scheme like the coordinator's own is_network, so a URL with no
-     * demuxer yet still gets them; a local path needs none. */
-    if (global && strstr(url, "://"))
+     * demuxer yet still gets them; a local path and a descriptor need none. */
+    if (global && fd < 0 && strstr(url, "://"))
         mp_setup_av_network_options(&args->net_opts, NULL, global, log);
 
     mp_thread t;
     atomic_fetch_add(&g_live_coordinators, 1);
     if (mp_thread_create(&t, coordinator_main, args) != 0) {
         atomic_fetch_sub(&g_live_coordinators, 1);
+        scan_close_fd(fd);
         av_dict_free(&args->net_opts);
         free(args->url);
         free(args);
