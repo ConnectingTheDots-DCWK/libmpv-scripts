@@ -12,12 +12,18 @@ This patch applies four changes:
 3. ao.h: Adds iOS stub types for CoreAudio HAL types
 4. ao_coreaudio_utils.c: Guards macOS code, adds iOS stub implementations
 
+Every change is computed first and the files are written at the end, so a
+step that fails leaves the tree as it was.
+
 Usage: python3 patch_ios_audio_stubs.py <mpv_source_dir>
 """
 import sys
 import re
 
 mpv_dir = sys.argv[1]
+
+# (path, new content, message), written once every step has passed.
+pending = []
 
 # ── 1. ao_avfoundation.m: comment out macOS-only device property ────────────
 
@@ -30,15 +36,16 @@ if '//[p->renderer setAudioOutputDeviceUniqueID:' not in content:
         '[p->renderer setAudioOutputDeviceUniqueID:',
         '//[p->renderer setAudioOutputDeviceUniqueID:',
     )
-    with open(avf_path, 'w') as f:
-        f.write(content)
-    print("Patched ao_avfoundation.m: commented out macOS-only device property")
+    pending.append((avf_path, content,
+                    "Patched ao_avfoundation.m: commented out macOS-only device property"))
 
 # ── 2. ao_audiounit.m: remove MixWithOthers ─────────────────────────────────
 # mpv 0.38+ adds MixWithOthers by default when not in exclusive mode, which
 # prevents iOS from assigning the Now Playing slot to this app (lock screen /
 # Control Center widget never appears). On iOS there is no true exclusive
-# hardware access anyway, so this option has no meaningful effect.
+# hardware access anyway, so this option has no meaningful effect. The block
+# must go exactly once and leave no use of the option behind: if mpv changes
+# its shape, the build stops instead of shipping a session that mixes.
 
 au_path = f"{mpv_dir}/audio/out/ao_audiounit.m"
 with open(au_path) as f:
@@ -46,14 +53,16 @@ with open(au_path) as f:
 
 if 'AVAudioSessionCategoryOptionMixWithOthers' in content:
     # Remove the if block: if (!(ao->init_flags & AO_INIT_EXCLUSIVE)) { ...MixWithOthers... }
-    content = re.sub(
+    content, n = re.subn(
         r'\s*if \(!\(ao->init_flags & AO_INIT_EXCLUSIVE\)\)\s*\{[^}]*AVAudioSessionCategoryOptionMixWithOthers[^}]*\}',
         '',
         content,
     )
-    with open(au_path, 'w') as f:
-        f.write(content)
-    print("Patched ao_audiounit.m: removed MixWithOthers")
+    if n != 1 or 'AVAudioSessionCategoryOptionMixWithOthers' in content:
+        sys.exit(f"[patch_ios_audio_stubs] {au_path}: the MixWithOthers block "
+                 f"matched {n} times or the option is still used; the session "
+                 f"code of mpv changed")
+    pending.append((au_path, content, "Patched ao_audiounit.m: removed MixWithOthers"))
 
 # ── 3. ao.h: iOS stub types for CoreAudio HAL ──────────────────────────────
 
@@ -101,9 +110,7 @@ static inline int AudioObjectRemovePropertyListener(uint32_t a, const void *b, v
         '#define MPLAYER_AUDIO_OUT_H\n' + ios_stubs,
         1,
     )
-    with open(aoh_path, 'w') as f:
-        f.write(content)
-    print("Patched ao.h: added iOS stub types")
+    pending.append((aoh_path, content, "Patched ao.h: added iOS stub types"))
 
 # ── 4. ao_coreaudio_utils.c: guard macOS code + iOS stubs ───────────────────
 
@@ -111,9 +118,9 @@ utils_path = f"{mpv_dir}/audio/out/ao_coreaudio_utils.c"
 with open(utils_path) as f:
     src = f.read()
 
-if 'TARGET_OS_IPHONE_COREAUDIO_UTILS_V2_PATCHED' in src:
+utils_patched = 'TARGET_OS_IPHONE_COREAUDIO_UTILS_V2_PATCHED' in src
+if utils_patched:
     print("ao_coreaudio_utils.c: already patched, skipping")
-    sys.exit(0)
 
 # Find end of license block
 license_end = src.find('*/\n')
@@ -241,6 +248,11 @@ new_src = (
     + '\n#define TARGET_OS_IPHONE_COREAUDIO_UTILS_V2_PATCHED 1\n'
 )
 
-with open(utils_path, 'w') as f:
-    f.write(new_src)
-print("Patched ao_coreaudio_utils.c for iOS (full file guard + stubs)")
+if not utils_patched:
+    pending.append((utils_path, new_src,
+                    "Patched ao_coreaudio_utils.c for iOS (full file guard + stubs)"))
+
+for path, text, message in pending:
+    with open(path, 'w') as f:
+        f.write(text)
+    print(message)
