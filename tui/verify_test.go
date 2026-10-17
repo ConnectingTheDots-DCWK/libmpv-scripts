@@ -4,7 +4,12 @@
 
 package main
 
-import "testing"
+import (
+	"os"
+	"regexp"
+	"strings"
+	"testing"
+)
 
 func feedVerify(m *model, evs ...string) {
 	for _, e := range evs {
@@ -151,5 +156,97 @@ func TestVerifyMessageWithTabs(t *testing.T) {
 	}
 	if got := b.checks[0].msg; got != "forbidden dep\textra\tcolumns" {
 		t.Errorf("msg = %q, want the tail preserved verbatim", got)
+	}
+}
+
+// verifyView renders the Verify screen for the events, focused on the first
+// binary, on a terminal large enough that nothing is cut.
+func verifyView(evs ...string) string {
+	m := newTestModel()
+	m.width, m.height = 200, 200
+	m.screen = scVerify
+	feedVerify(&m, evs...)
+	return m.viewVerify()
+}
+
+// Every phase verify_binaries.sh enters shows in the detail with its problems:
+// slices (per-slice integrity), features (feature presence) and l15 (code
+// signing) included.
+func TestVerifyDetailShowsEveryScriptPhase(t *testing.T) {
+	out := verifyView(
+		"@@V1@@\tbin\tlibmpv_ios.xcframework.zip\tios",
+		"@@V1@@\tcheck\tlibmpv_ios.xcframework.zip\texports\tpass\t54/54",
+		"@@V1@@\tcheck\tlibmpv_ios.xcframework.zip\tslices\tfail\tslice x86_64: 0 mpv_* exports",
+		"@@V1@@\tcheck\tlibmpv_ios.xcframework.zip\tfeatures\tfail\tfeature MISSING: HTTPS/TLS",
+		"@@V1@@\tcheck\tlibmpv_ios.xcframework.zip\tl15\tfail\tsigning identifier mismatch",
+		"@@V1@@\tbindone\tlibmpv_ios.xcframework.zip",
+	)
+	for _, want := range []string{
+		"Per-slice integrity", "slice x86_64: 0 mpv_* exports",
+		"Feature presence", "feature MISSING: HTTPS/TLS",
+		"Code-signing identity", "signing identifier mismatch",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the Verify detail does not show %q", want)
+		}
+	}
+}
+
+// A phase the TUI does not know yet still shows, after the known ones, so a
+// new verifier phase never hides its failures.
+func TestVerifyDetailShowsUnknownPhase(t *testing.T) {
+	out := verifyView(
+		"@@V1@@\tbin\tlibmpv_linux-x86_64.so\tlinux",
+		"@@V1@@\tcheck\tlibmpv_linux-x86_64.so\tfmt\tpass\tELF ok",
+		"@@V1@@\tphase\tlibmpv_linux-x86_64.so\tl99",
+		"@@V1@@\tcheck\tlibmpv_linux-x86_64.so\tl99\tfail\ta brand new problem",
+		"@@V1@@\tbindone\tlibmpv_linux-x86_64.so",
+	)
+	if !strings.Contains(out, "a brand new problem") {
+		t.Error("a check of an unknown phase is not shown")
+	}
+}
+
+// slices runs only on a universal Mach-O: a binary that never entered it shows
+// no empty section for it.
+func TestVerifyDetailHidesPhaseNeverEntered(t *testing.T) {
+	out := verifyView(
+		"@@V1@@\tbin\tlibmpv_linux-x86_64.so\tlinux",
+		"@@V1@@\tcheck\tlibmpv_linux-x86_64.so\texports\tpass\t54/54",
+		"@@V1@@\tbindone\tlibmpv_linux-x86_64.so",
+	)
+	if strings.Contains(out, "Per-slice integrity") {
+		t.Error("a phase the binary never entered is shown")
+	}
+	if !strings.Contains(out, "Exports") {
+		t.Error("the exports phase is missing")
+	}
+}
+
+// verifyPhaseOrder lists exactly the phases verify_binaries.sh enters, so a
+// phase added to the script without a section here fails this test.
+func TestVerifyPhaseOrderMatchesScript(t *testing.T) {
+	data, err := os.ReadFile("../scripts/verify_binaries.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := map[string]bool{}
+	for _, mm := range regexp.MustCompile(`(?m)^\s*phase ([a-z0-9]+)\s*$`).FindAllStringSubmatch(string(data), -1) {
+		script[mm[1]] = true
+	}
+	if len(script) == 0 {
+		t.Fatal("no phase found in verify_binaries.sh")
+	}
+	listed := map[string]bool{}
+	for _, p := range verifyPhaseOrder {
+		listed[p.id] = true
+		if !script[p.id] {
+			t.Errorf("verifyPhaseOrder lists %q, which verify_binaries.sh never enters", p.id)
+		}
+	}
+	for id := range script {
+		if !listed[id] {
+			t.Errorf("verify_binaries.sh enters phase %q, missing from verifyPhaseOrder", id)
+		}
 	}
 }

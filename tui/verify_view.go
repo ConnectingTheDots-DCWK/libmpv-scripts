@@ -80,15 +80,19 @@ func statusFromStr(s string) phaseStatus {
 
 // verifyPhaseOrder is every verification phase in the order the verifier runs
 // them, with a readable label. The focused-binary detail groups its checks under
-// these phases so the report reads as sections, not a flat dump.
+// these phases so the report reads as sections, not a flat dump. slices runs
+// only on a universal Mach-O. TestVerifyPhaseOrderMatchesScript keeps the list
+// equal to the phases verify_binaries.sh enters.
 var verifyPhaseOrder = []struct{ id, label string }{
 	{"fmt", "Format / arch"},
 	{"exports", "Exports"},
+	{"slices", "Per-slice integrity"},
 	{"patches", "mpv patches"},
 	{"ffmpeg", "FFmpeg patches"},
 	{"decoders", "Audio decoders"},
 	{"filters", "Audio filters"},
 	{"audioonly", "Audio-only invariant"},
+	{"features", "Feature presence"},
 	{"deps", "Runtime dependencies"},
 	{"versions", "Dependency versions"},
 	{"apihash", "API surface hash"},
@@ -96,6 +100,7 @@ var verifyPhaseOrder = []struct{ id, label string }{
 	{"l12", "UND symbol resolvability"},
 	{"l13", "Runtime load test"},
 	{"l14", "Stub detection"},
+	{"l15", "Code-signing identity"},
 	{"l16", "ELF invariants"},
 }
 
@@ -475,12 +480,30 @@ func (m model) viewVerify() string {
 	for _, c := range bv.checks {
 		byPhase[c.phase] = append(byPhase[c.phase], c)
 	}
-	var lines []string
+	// The known phases in run order, then any phase the verifier emitted that
+	// verifyPhaseOrder does not list yet, in the order it first appeared, so
+	// its checks still show.
+	var order []string
+	known := map[string]bool{}
 	for _, ph := range verifyPhaseOrder {
-		st := bv.phase[ph.id]
-		checks := byPhase[ph.id]
-		if st == psNone && len(checks) == 0 {
-			continue // phase not reached on this binary
+		order = append(order, ph.id)
+		known[ph.id] = true
+	}
+	for _, c := range bv.checks {
+		if !known[c.phase] {
+			order = append(order, c.phase)
+			known[c.phase] = true
+		}
+	}
+	if bv.cur != "" && !known[bv.cur] {
+		order = append(order, bv.cur)
+	}
+	var lines []string
+	for _, id := range order {
+		st := bv.phase[id]
+		checks := byPhase[id]
+		if len(checks) == 0 && (st == psNone || (st == psSkip && bv.done)) {
+			continue // phase not reached on this binary (slices off a universal Mach-O)
 		}
 		var pp, pw, pf int
 		for _, c := range checks {
@@ -494,7 +517,7 @@ func (m model) viewVerify() string {
 			}
 		}
 		hg, hs := m.vGlyph(st)
-		if bv.cur == ph.id && verifyAlive {
+		if bv.cur == id && verifyAlive {
 			hg, hs = spinnerFrames[m.spinPos], lipgloss.NewStyle().Foreground(cRun)
 		}
 		cnt := ""
@@ -507,14 +530,14 @@ func (m model) viewVerify() string {
 		if pf > 0 {
 			cnt += "  " + failStyle.Render(fmt.Sprintf("%d ✗", pf))
 		}
-		lines = append(lines, hs.Render(hg)+" "+textStyle.Render(padTrunc(ph.label, 24))+"  "+cnt)
+		lines = append(lines, hs.Render(hg)+" "+textStyle.Render(padTrunc(phaseLabel(id), 24))+"  "+cnt)
 		for _, c := range checks { // expand problems, and N/A so its reason shows
 			if c.status == "fail" || c.status == "warn" || c.status == "na" {
 				gl, gs := m.vGlyph(statusFromStr(c.status))
 				lines = append(lines, "     "+gs.Render(gl)+" "+truncate(c.msg, maxInt(1, m.width-7)))
 			}
 		}
-		if len(checks) == 0 && bv.cur == ph.id && verifyAlive {
+		if len(checks) == 0 && bv.cur == id && verifyAlive {
 			lines = append(lines, "     "+dimStyle.Render("running…"))
 		}
 	}
