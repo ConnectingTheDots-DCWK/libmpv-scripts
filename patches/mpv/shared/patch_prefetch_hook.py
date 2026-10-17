@@ -46,8 +46,9 @@ rescan-external-files at the next entry.
 
 `process_hooks` is implemented as a busy loop that pumps `mp_idle` until the
 hook signals completion (player/loadfile.c `process_hooks`). `mp_idle` calls
-`handle_update_cache` (player/playloop.c), which at end-of-file calls
-`prefetch_next` again:
+`handle_update_cache` (player/playloop.c). The playing file keeps its
+demuxer during the hook, so handle_update_cache runs in full there and at
+end-of-file calls `prefetch_next` again:
 
     handle_update_cache()
         ...
@@ -58,11 +59,11 @@ Without a guard, the chain prefetch_next → process_hooks → mp_idle →
 handle_update_cache → prefetch_next recurses until the core thread stack
 overflows (SIGBUS / stack guard violation).
 
-The fix is a function-scope `static bool` set to true only while we are
-inside our nested `process_hooks` call. prefetch_next runs exclusively on
-the mpv core thread, so the static is single-threaded and safe. Any
-re-entry attempt (from handle_update_cache via mp_idle) bails out
-immediately via the guard.
+The guard is `mpctx->mak_prefetch_hook_active`, the flag of the hook view.
+It belongs to one player and only its core thread reads and writes it, so
+two players in one process prefetch independently. Older versions used a
+function-scope static shared by every player: one player in a slow hook
+made the others skip their prefetch, and the static was a data race.
 
 ===== Entry lifetime =====
 
@@ -131,7 +132,8 @@ CORE_PATCHED = CORE_PRISTINE + (
     '     * on_load hook of the next entry (player/loadfile.c). The playing\n'
     '     * file keeps the two fields above and its demuxer. path, filename\n'
     '     * and stream-open-filename report the entry being loaded from these\n'
-    '     * (player/command.c). Core thread only. */\n'
+    '     * (player/command.c). The flag also stops prefetch_next from\n'
+    '     * re-entering through the hook pump. Core thread only. */\n'
     '    bool mak_prefetch_hook_active;\n'
     '    char *mak_prefetch_filename;\n'
     '    char *mak_prefetch_sof;\n'
@@ -239,10 +241,9 @@ PATCHED = (
     '     *\n'
     '     * process_hooks() below pumps mp_idle, which calls handle_update_cache,\n'
     '     * which at end-of-file calls prefetch_next again. Without this guard we\n'
-    '     * recurse until the core thread stack overflows. prefetch_next runs only\n'
-    '     * on the mpv core thread, so a function-scope static is safe. */\n'
-    '    static bool mak_in_prefetch_hooks = false;\n'
-    '    if (mak_in_prefetch_hooks)\n'
+    '     * recurse until the core thread stack overflows. The flag belongs to\n'
+    '     * this player and only its core thread touches it. */\n'
+    '    if (mpctx->mak_prefetch_hook_active)\n'
     '        return;\n'
     '\n'
     '    if (!mpctx->opts->prefetch_open || mpctx->open_active)\n'
@@ -272,9 +273,7 @@ PATCHED = (
     '        mpctx->mak_prefetch_sof = owned_url;\n'
     '        mpctx->mak_prefetch_hook_active = true;\n'
     '\n'
-    '        mak_in_prefetch_hooks = true;\n'
     '        process_hooks(mpctx, "on_load");\n'
-    '        mak_in_prefetch_hooks = false;\n'
     '\n'
     '        char *resolved_url = talloc_strdup(NULL, mpctx->mak_prefetch_sof);\n'
     '        mpctx->mak_prefetch_hook_active = false;\n'
