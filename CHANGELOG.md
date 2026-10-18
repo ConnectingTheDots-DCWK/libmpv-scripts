@@ -17,6 +17,8 @@
 - The PCM tap starts over when the output changes channel count or rate, and stops copying audio when nobody reads it.
 - A live PCM entry with `loop-file` or an A-B loop on plays once to its end instead of spinning on a failing seek (`patch_pcm_stream.py`).
 - A shorter `chapter-list` after a chapter seek no longer crashes in `chapter-metadata` (`patch_chapter_list_reset.py`).
+- Android: the audiotrack output waits when there is nothing to play instead of spinning on a whole core, and feeds silence with `audio-stream-silence` (`patch_audiotrack.py`).
+- Android: when audioserver dies, audiotrack asks mpv to reopen the output instead of recreating a track that never starts, and a pause keeps the audio the track held instead of skipping 0.1 to 0.3 s at resume.
 
 ### Changed
 - The embedded CA bundle and the system store load only when TLS verification is on.
@@ -26,7 +28,7 @@
 - The macOS and iOS builds run on the `macos-26` image and log the Xcode, SDK and tool versions.
 - The iOS audio session patch, the libsmb2 FFmpeg patch and `patch_prefetch_state.py` stop the build when an anchor is missing instead of shipping without the change.
 - The patches have native tests: `verify/tests/native/run.sh` builds a debug libmpv with AddressSanitizer and runs the C tests of the fixes, and `network_test.sh` checks the SMB and TLS patches against local servers. CI runs them, and `go vet` and `go test` for the TUI, in jobs that do not hold back the release.
-- The TUI shows the per-slice, feature and code-signing checks of Verify, and its version follows this CHANGELOG.
+- The TUI shows the per-slice, feature and code-signing checks of Verify, and its version follows this CHANGELOG. It lists the Android `audiotrack` patch, on by default.
 
 ### Docs
 - The comments of the bulk analysis, the taps and the Android JNI bridge match the code.
