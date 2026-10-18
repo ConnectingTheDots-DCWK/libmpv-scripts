@@ -18,14 +18,21 @@ Modifies (all under libavformat/):
   - ca_bundle_loader.c  (copied in: the X509_STORE loader)
   - ca_bundle_data.c    (GENERATED here from cacert.pem: the PEM byte array)
   - Makefile            (OBJS-$(CONFIG_OPENSSL) += ca_bundle_data.o ca_bundle_loader.o)
-  - tls_openssl.c       (#include "ca_bundle.h"; load the embedded roots whenever
-                         no explicit ca_file is set, treating an empty ca_file as
-                         unset so a blank tls-ca-file falls back to the bundle)
+  - tls_openssl.c       (#include "ca_bundle.h"; load the embedded roots when
+                         tls_verify is on and no explicit ca_file is set,
+                         treating an empty ca_file as unset so a blank
+                         tls-ca-file falls back to the bundle)
+
+With tls_verify off, mpv's default, nothing reads the roots, and parsing the
+bundle and the system store cost every handshake milliseconds of CPU. Both
+load only when the peer is verified (VERIFY_MARKER).
 
 Idempotency: the text edits (Makefile, tls_openssl.c) are MARKER-guarded; the
 .c/.h are (re)written every run so a refreshed cacert.pem propagates on rebuild.
+A tree patched by the version without the verify gate is brought up to date.
 Anchors that go missing raise — an ffmpeg layout change must fail loudly, not
-silently drop HTTPS trust.
+silently drop HTTPS trust. tls_openssl.c is written only once every anchor
+has matched.
 
 Usage:
     python3 patch_ffmpeg_embed_cacert.py <ffmpeg_source_dir>
@@ -35,6 +42,7 @@ import re
 import sys
 
 MARKER = 'MAK_EMBED_CACERT_V1'
+VERIFY_MARKER = 'MAK_EMBED_CACERT_VERIFY'
 SRC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'embed_cacert')
 
 
@@ -91,17 +99,16 @@ def patch_makefile(path):
 def patch_tls_openssl(path):
     with open(path) as f:
         text = f.read()
-    if MARKER in text:
+    if VERIFY_MARKER in text:
         print('Already patched: %s' % path)
         return
 
-    inc_anchor = '#include <openssl/x509v3.h>'
-    if inc_anchor not in text:
-        raise RuntimeError('openssl include anchor not found in %s' % path)
-    text = text.replace(
-        inc_anchor,
-        inc_anchor + '\n#include "ca_bundle.h" /* ' + MARKER + ' */',
-        1)
+    include = '#include "ca_bundle.h" /* ' + MARKER + ' */'
+    if include not in text:
+        inc_anchor = '#include <openssl/x509v3.h>'
+        if text.count(inc_anchor) != 1:
+            raise RuntimeError('openssl include anchor not found in %s' % path)
+        text = text.replace(inc_anchor, inc_anchor + '\n' + include, 1)
 
     old = (
         '    if (s->ca_file) {\n'
@@ -115,7 +122,8 @@ def patch_tls_openssl(path):
         '        }\n'
         '    }'
     )
-    new = (
+    # The block as the version without the verify gate left it.
+    v1 = (
         '    /* ' + MARKER + ': an empty ca_file means "use the embedded roots",\n'
         '     * not "load a file named \'\'", so treat "" as unset. */\n'
         '    if (s->ca_file && s->ca_file[0]) {\n'
@@ -130,11 +138,32 @@ def patch_tls_openssl(path):
         '                openssl_get_error(c));\n'
         '    }'
     )
-    if old not in text:
+    new = (
+        '    /* ' + MARKER + ': an empty ca_file means "use the embedded roots",\n'
+        '     * not "load a file named \'\'", so treat "" as unset. */\n'
+        '    if (s->ca_file && s->ca_file[0]) {\n'
+        '        if (!SSL_CTX_load_verify_locations(c->ctx, s->ca_file, NULL))\n'
+        '            av_log(h, AV_LOG_ERROR, "SSL_CTX_load_verify_locations %s\\n", openssl_get_error(c));\n'
+        '    } else if (s->verify) {\n'
+        '        /* ' + VERIFY_MARKER + ': the roots decide something only when\n'
+        '         * the peer is verified. With tls_verify off, parsing them cost\n'
+        '         * every handshake milliseconds of CPU for nothing. */\n'
+        '        if (ff_load_embedded_ca(c->ctx) < 0)\n'
+        '            av_log(h, AV_LOG_WARNING, "Failed to load embedded CA bundle\\n");\n'
+        '        /* Also honour any OS trust store the platform happens to expose. */\n'
+        '        if (!SSL_CTX_set_default_verify_paths(c->ctx))\n'
+        '            av_log(h, AV_LOG_VERBOSE, "No system verify locations: %s\\n",\n'
+        '                openssl_get_error(c));\n'
+        '    }'
+    )
+    if text.count(v1) == 1:
+        text = text.replace(v1, new, 1)
+    elif text.count(old) == 1:
+        text = text.replace(old, new, 1)
+    else:
         raise RuntimeError(
             'CA-file verify block not found verbatim in %s '
             '(ffmpeg tls_openssl.c layout changed?)' % path)
-    text = text.replace(old, new, 1)
 
     with open(path, 'w') as f:
         f.write(text)
