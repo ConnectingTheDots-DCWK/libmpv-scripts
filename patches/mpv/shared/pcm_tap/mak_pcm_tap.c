@@ -189,6 +189,14 @@ void mak_pcm_tap_write(struct ao *ao, void **data, int num_samples)
         return;
     }
 
+    /* A new output format starts the ring over: the frames already in it
+     * have the old channel count or rate, and the reader would cut them
+     * with the new ones. */
+    if (g_tap.channels != channels || g_tap.sample_rate != ao->samplerate) {
+        g_tap.write_pos   = 0;
+        g_tap.valid_bytes = 0;
+    }
+
     g_tap.sample_rate = ao->samplerate;
     g_tap.channels    = channels;
     g_tap.last_pts_ns = mp_time_ns();
