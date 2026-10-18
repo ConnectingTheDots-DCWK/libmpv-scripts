@@ -40,12 +40,13 @@ Property
                        channels    : INT64 (interleaved channel count)
                        pts_ns      : INT64 (mp_time_ns() of last write)
                        samples     : BYTE_ARRAY (interleaved Float32
-                                     samples, latest window of up to
-                                     ~200 ms of audio)
-                     M_PROPERTY_UNAVAILABLE if no audio has flowed yet
-                     OR if the AO is not running with float interleaved
-                     samples (the wrapper requests this via
-                     `--audio-format=float` at init).
+                                     samples, the latest 4096 frames
+                                     at most, ~85 ms at 48 kHz)
+                     M_PROPERTY_UNAVAILABLE until the tap is armed (the
+                     first read arms it) and the output has written PCM
+                     since. Any PCM format works (see below). A change
+                     of channel count or rate empties the ring, so the
+                     first reads after it return a shorter window.
 
 Format coverage
 ===============
@@ -64,18 +65,18 @@ is nothing meaningful to visualise. `af_fmt_is_pcm()` gates the path.
 Threading
 =========
 
-Single-producer single-consumer ring. Producer = AO thread (push) or
-audio API render callback (pull). Consumer = client thread reading
-the property.
+Every AO in the process writes into the one ring: the AO thread
+(push) or the audio API render callback (pull) of each player. The
+readers are the core threads that run the property getter. The shared
+state (`g_tap`) is protected by an `mp_mutex` (mpv's portable mutex
+wrapper, a pthread mutex on POSIX, an SRWLOCK on Windows), which
+serialises all of them.
 
-The shared state (`g_tap`) is protected by an `mp_mutex` (mpv's
-portable mutex wrapper — a pthread mutex on POSIX, an SRWLOCK on
-Windows).
-Audio-thread mutex hold time is bounded to one `memcpy` of ≤ 4 KB
-(typical AO chunk × 4 B per float sample × 2 channels) — sub-µs on
-modern hardware, well under any audio period. mpv's own AO buffer
-code already takes a mutex on the same thread, so this matches the
-existing concurrency budget.
+The writer holds the lock for the conversion to Float32 and the copy
+into the ring, a few µs for a typical chunk. The reader holds it for
+the allocation of the snapshot and the copy of up to 4096 frames
+(32 KB in stereo), so a writer that arrives then waits for a malloc.
+mpv's own AO buffer code already takes a mutex on the same thread.
 
 Multi-Player note
 =================
@@ -84,7 +85,9 @@ The ring is process-wide singleton state: there is one ring shared by
 every libmpv instance loaded into the process. With more than one
 Player playing simultaneously, the ring interleaves samples from all
 of them — visually noisy in a visualizer, but functionally benign
-(no UB, no crash). The 99% case (one Player) is exact.
+(no UB, no crash). When their outputs differ in channel count or rate,
+each switch of writer empties the ring, so the windows stay short. The
+99% case (one Player) is exact.
 
 Files patched
 =============
@@ -244,8 +247,8 @@ COMMAND_GETTER_INSERT = (
     '/* ' + MARKER + ' ─── read-only property: snapshot of the most\n'
     ' * recent samples that flowed through the AO. Returns a\n'
     ' * MAP_NODE { sample_rate, channels, pts_ns, samples }, or\n'
-    ' * M_PROPERTY_UNAVAILABLE if no audio has flowed yet (or the AO\n'
-    ' * is not running with float-interleaved samples). The wrapper\n'
+    ' * M_PROPERTY_UNAVAILABLE until the tap is armed (the first read\n'
+    ' * arms it) and the AO has written PCM since. The wrapper\n'
     ' * polls this at its configured emit rate (typically 30 fps); we\n'
     ' * intentionally do NOT call mp_notify_property here — pushing\n'
     ' * change events for every AO chunk would saturate the event\n'

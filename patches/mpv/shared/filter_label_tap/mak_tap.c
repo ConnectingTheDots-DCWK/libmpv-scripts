@@ -3,30 +3,33 @@
  * Concurrency model
  * -----------------
  *
- * Producer (writer): the audio-filter thread, which calls
- *     mak_tap_write() from inside user_wrapper_process for every
- *     frame the active filters produce. Each mpv instance has its
- *     own chain thread but the rings are process-wide, so writers
- *     take g_tap_write_lock: one writer at a time per ring.
+ * Producer (writer): the core thread of each mpv instance, which
+ *     runs the audio filter chain (mp_filter_graph_run in the
+ *     playloop) and calls mak_tap_write() from inside
+ *     user_wrapper_process for every frame the active filters
+ *     produce. The rings are process-wide, so writers take
+ *     g_tap_write_lock: one writer at a time per ring.
  *
- * Consumer (reader): the mpv main thread, which drains the ring
- *     via the audio-tap-frames property getter at the wrapper's
- *     polling cadence (typically 30 Hz).
+ * Consumer (reader): the core thread as well, in the
+ *     audio-tap-frames property getter, at the wrapper's polling
+ *     cadence (typically 30 Hz).
  *
  * Coordinator: any thread setting / clearing the active-tap list
  *     via mak_tap_set_active(), guarded by a small mutex.
  *
- * Hot-path synchronisation uses an SPSC seqlock — the canonical
- * lock-free pattern for real-time audio. The writer never blocks
- * on a reader; the reader retries on contention (rare in practice
- * because writes are short and reads infrequent). Each tap_ring
- * has its own atomic sequence counter:
+ * With one player the writer and the reader share a thread and
+ * never overlap. The reader still reads through a seqlock, with no
+ * lock: it guards against the writers of other mpv instances (more
+ * players in the process) and against reset_ring() from
+ * set_active. A writer never blocks on a reader; the reader
+ * retries on contention. Each tap_ring has its own atomic sequence
+ * counter:
  *
  *     even = stable     (data may be read)
  *     odd  = writing    (reader must retry)
  *
  * The slot table itself uses an _Atomic bool per slot for the
- * "used" flag, so find_slot() on the audio thread is also
+ * "used" flag, so find_slot() on the writer's path is also
  * lock-free. set_active still takes a tiny mutex to serialise
  * concurrent subscriber additions / removals. */
 #include <math.h>
@@ -98,7 +101,7 @@
 #define TAP_SEQLOCK_MAX_RETRIES 1024
 
 struct tap_ring {
-    /* SPSC seqlock — even = stable, odd = writer in progress.
+    /* Seqlock: even = stable, odd = writer in progress.
      * Writer increments to odd before any field write, increments
      * back to even after all writes; reader spins until even,
      * snapshots, and validates the seq is unchanged. */
@@ -170,17 +173,17 @@ static struct {
  * cost. (ELF/PE are immune: their static lock initializers are all
  * zero.) */
 static mp_mutex g_tap_activation_lock = MP_STATIC_MUTEX_INITIALIZER;
-/* Serialises the writers: each mpv instance has its own audio chain
- * thread, and two of them tapping the same label (or folding the
- * waveform) would share one ring and one scratch. Never contended with
- * a single player; the reader stays lock-free on the seqlock. Lock
- * order: g_tap_activation_lock before g_tap_write_lock. */
+/* Serialises the writers: each mpv instance runs its audio chain on
+ * its own core thread, and two of them tapping the same label (or
+ * folding the waveform) would share one ring and one scratch. Never
+ * contended with a single player; the reader stays lock-free on the
+ * seqlock. Lock order: g_tap_activation_lock before g_tap_write_lock. */
 static mp_mutex g_tap_write_lock = MP_STATIC_MUTEX_INITIALIZER;
 
 /* Lock-free probe — atomic_load on the slot.used flag (acquire
  * orders the subsequent name read against the matching
  * activation's release-store on used). Returns the slot index
- * or -1 when not active. Hot path on the audio thread. */
+ * or -1 when not active. Hot path of every writer. */
 static int find_slot(const char *name)
 {
     if (!name) return -1;
@@ -202,7 +205,7 @@ static int find_slot(const char *name)
  * Leaving the buffer alive across activation cycles costs at most
  * 8 slots × 2 sides × 16 MB = 256 MB worst case (typical: a few
  * MB) but eliminates the use-after-free race that would arise if
- * the main thread freed the buffer mid-write. */
+ * set_active freed the buffer mid-write. */
 static void reset_ring(struct tap_ring *r)
 {
     /* Caller holds g_tap_write_lock, so no writer is inside its
@@ -225,13 +228,13 @@ void mak_tap_set_active(const char *csv)
 
     /* Phase 1: tear down every active slot. Release-store on
      * `used = false` makes the deactivation visible to the
-     * audio thread's acquire-load in find_slot. */
+     * writers' acquire-load in find_slot. */
     for (int i = 0; i < MAK_TAP_MAX; i++) {
         atomic_store_explicit(&g_tap.slots[i].used, false,
                               memory_order_release);
     }
     /* Phase 2: clear name + ring metadata. Buf pointers stay
-     * alive — only the writer (audio thread) touches them, and
+     * alive — only the writer touches them, and
      * only inside its seqlock critical section. An in-flight
      * writer that already passed find_slot continues safely
      * against the still-valid buf; its write goes to the now-
@@ -252,7 +255,7 @@ void mak_tap_set_active(const char *csv)
 
     /* Phase 3: parse CSV, populate slots, publish via release-
      * store on `used = true`. Name is written before the publish
-     * so an audio thread that sees used==true reads a consistent
+     * so a writer that sees used==true reads a consistent
      * name. */
     int slot = 0;
     const char *p = csv;
@@ -295,7 +298,7 @@ char *mak_tap_get_active(void *parent)
 
 bool mak_tap_label_active(const char *name)
 {
-    /* Lock-free fast path on the audio thread. With no taps
+    /* Lock-free fast path on the chain, per frame. With no taps
      * active, every slot.used atomic_load reports false on the
      * first iteration and the function returns ~immediately
      * (no strcmp, no lock). */
@@ -582,7 +585,7 @@ void mak_tap_write(const char *name, bool is_post,
  * When `target_pts_secs` is NaN we fall back to the latest
  * window.
  *
- * SPSC-seqlock retry: snapshots the ring fields + memcpy-s the
+ * Seqlock retry: snapshots the ring fields + memcpy-s the
  * slice in one atomic pass. If the writer interrupts (seq goes
  * odd), retries up to TAP_SEQLOCK_MAX_RETRIES. The byte_array's
  * data buffer is talloc'd once and overwritten on retries — no
@@ -748,7 +751,7 @@ int mak_tap_read_all(struct mpv_node *out, void *parent,
     /* Brief activation_lock just to capture a stable snapshot of
      * which slots are active + their names. Per-ring data is
      * read lock-free below via the seqlock pattern, so a long
-     * memcpy of audio samples never blocks the audio thread. */
+     * memcpy of audio samples never blocks a writer. */
     mp_mutex_lock(&g_tap_activation_lock);
     int      idx_buf[MAK_TAP_MAX];
     char    *name_buf[MAK_TAP_MAX];

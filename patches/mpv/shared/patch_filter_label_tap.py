@@ -36,13 +36,13 @@ guarded by a tiny "is this filter currently being tapped?" check, so
 the cost on a normal playback session (no taps active) is one strcmp
 per frame per filter.
 
-Each ring is a rolling buffer (~340 ms at 48 kHz / 2 ch float, 128 KB)
-that stores the playback PTS of the most-recently-written sample. On
-read, the property getter passes mpv's current `playback_pts` and the
-reader returns the slice of samples whose timestamps span that PTS —
-so even though the chain runs ahead of the AO and writes in bursts,
-the visualiser sees a window of audio aligned with what the AO is
-playing right now, advancing smoothly at the audio output rate.
+Each ring is a rolling buffer (3 s of Float32 at the stream's format,
+at most 16 MB) that stores the playback PTS of the most-recently-written
+sample. On read, the property getter passes mpv's current `playback_pts`
+and the reader returns the slice of samples whose timestamps span that
+PTS. So even though the chain runs ahead of the AO and writes in
+bursts, the visualiser sees a window of audio aligned with what the AO
+is playing right now, advancing smoothly at the audio output rate.
 
 Active-tap selection
 ====================

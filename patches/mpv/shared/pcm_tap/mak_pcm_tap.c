@@ -18,9 +18,10 @@
 #include "osdep/threads.h"
 #include "osdep/timer.h"
 
-/* 200 ms @ 48 kHz / 2 channels / Float32 ≈ 76 KB. The cap is a
- * static upper bound; the actual valid bytes track what the AO
- * has produced so far (`valid_bytes`). */
+/* 256 KiB of Float32: ~680 ms at 48 kHz stereo. A read returns at
+ * most the latest 4096 frames (32 KB in stereo). The cap is a
+ * static upper bound; the valid bytes track what the AO has
+ * produced since the last format change (`valid_bytes`). */
 #define MAK_PCM_TAP_CAPACITY (256 * 1024)
 
 /* Scratch buffer for format conversion. 64K floats = 256 KB —
