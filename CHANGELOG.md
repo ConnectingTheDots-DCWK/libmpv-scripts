@@ -18,7 +18,7 @@
 - A live PCM entry with `loop-file` or an A-B loop on plays once to its end instead of spinning on a failing seek (`patch_pcm_stream.py`).
 - A shorter `chapter-list` after a chapter seek no longer crashes in `chapter-metadata` (`patch_chapter_list_reset.py`).
 - Android: the audiotrack output waits when there is nothing to play instead of spinning on a whole core, and feeds silence with `audio-stream-silence` (`patch_audiotrack.py`).
-- Android: when audioserver dies, audiotrack asks mpv to reopen the output instead of recreating a track that never starts, and a pause keeps the audio the track held instead of skipping 0.1 to 0.3 s at resume.
+- Android: when audioserver dies, audiotrack asks mpv to reopen the output instead of recreating a track that never starts, and a pause keeps the audio the track held instead of skipping 0.1 to 0.3 s at resume. The paused position stands still instead of creeping ahead and going back at resume.
 
 ### Changed
 - The embedded CA bundle and the system store load only when TLS verification is on.
