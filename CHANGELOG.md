@@ -1,3 +1,36 @@
+## [0.2.2] - Unreleased
+
+### Fixed
+- While an `on_load` hook runs for the playlist prefetch, the playing file keeps its demuxer: a `dump-cache` no longer aborts, and duration, metadata, position, track switches and the watch-later commands stay on the playing file. `path`, `filename` and `stream-open-filename` report the entry being loaded (`patch_prefetch_hook.py`).
+- Two players in one process prefetch independently, and the prefetch skips an entry whose per-file options differ from the playing one, so its HTTP headers never reach the next host.
+- `prefetch-state` turns `failed` as soon as the prefetch open fails, and going idle closes the prefetched file and resets the state.
+- The waveform and the loudness scan no longer crash on a file with more than 8 channels or on an MP3 that turns from stereo to mono, and they describe the audio track that plays, not the first one. An external track grows its waveform from playback and reports the loudness `unavailable`.
+- An `fd://` or `fdclose://` source, what an Android `content://` URI becomes, gets its waveform and loudness scan instead of `failed`.
+- Stopping or leaving a file stops its analysis and its download, turning the loudness scan off stops a pass it ran alone, and a failed worker or allocation ends the scan as `failed` at once.
+- The analysis follows the playback axis of a file whose timestamps do not start at zero, and an HTTP file whose duration is estimated past its end is analyzed from the cache instead of being downloaded again.
+- Windows: the audio output closes on mpv's core thread when a core is destroyed, before the device watcher (`patch_hotplug_core_thread.py`).
+- iOS: mpv no longer sets the `MoviePlayback` session mode at each output init, so the app keeps its own mode.
+- `audio-spdif` passthrough works and https plays through an HTTP proxy: FFmpeg keeps its spdif muxer and the httpproxy protocol.
+- FFmpeg audio filters refuse values that read or wrote out of their buffers (chorus, aecho, pan, mcompand, compand, aiir, aeval, adelay), and live dynaudnorm and adrc commands no longer leak (`patch_ffmpeg_filter_bounds.py`).
+- SMB waits through the async API and honours FFmpeg's interrupt, so stop and quit no longer wait about 120 s for a server that stopped answering, and closing after a dropped connection no longer writes into freed memory.
+- An `smb2://` URL reads the password from the authority only and keeps a `%` that starts no valid escape; a `%00` escape fails the open. With `network-timeout` 0 the SMB connect gets 30 s.
+- The PCM tap starts over when the output changes channel count or rate, and stops copying audio when nobody reads it.
+- A live PCM entry with `loop-file` or an A-B loop on plays once to its end instead of spinning on a failing seek (`patch_pcm_stream.py`).
+- A shorter `chapter-list` after a chapter seek no longer crashes in `chapter-metadata` (`patch_chapter_list_reset.py`).
+
+### Changed
+- The embedded CA bundle and the system store load only when TLS verification is on.
+
+### Build
+- Verify fails when the x86_64 DLL crashes or stalls under native Wine, and checks every library for the spdif muxer and the httpproxy, https and tls protocols.
+- The macOS and iOS builds run on the `macos-26` image and log the Xcode, SDK and tool versions.
+- The iOS audio session patch, the libsmb2 FFmpeg patch and `patch_prefetch_state.py` stop the build when an anchor is missing instead of shipping without the change.
+- The patches have native tests: `verify/tests/native/run.sh` builds a debug libmpv with AddressSanitizer and runs the C tests of the fixes, and `network_test.sh` checks the SMB and TLS patches against local servers. CI runs them, and `go vet` and `go test` for the TUI, in jobs that do not hold back the release.
+- The TUI shows the per-slice, feature and code-signing checks of Verify, and its version follows this CHANGELOG.
+
+### Docs
+- The comments of the bulk analysis, the taps and the Android JNI bridge match the code.
+
 ## [0.2.1] - 15-10-2026
 
 ### Fixed
