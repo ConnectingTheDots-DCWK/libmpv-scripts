@@ -50,21 +50,28 @@ typedef struct {
 } LIBSMB2Context;
 
 /**
- * Percent-decode a string in-place (e.g. %26 -> &).
+ * Percent-decode a string in-place (e.g. %26 -> &). A '%' that is not
+ * followed by two hex digits is kept as it is, as ff_urldecode does, so
+ * "100% Pure.flac" stays whole. %00 is refused with AVERROR(EINVAL): a
+ * NUL would cut the name short and open another file.
  */
-static void percent_decode(char *s)
+static int percent_decode(char *s)
 {
     char *r = s, *w = s;
     while (*r) {
-        if (*r == '%' && r[1] && r[2]) {
+        if (*r == '%' && av_isxdigit(r[1]) && av_isxdigit(r[2])) {
             char hex[3] = { r[1], r[2], 0 };
-            *w++ = (char)strtol(hex, NULL, 16);
+            long c = strtol(hex, NULL, 16);
+            if (!c)
+                return AVERROR(EINVAL);
+            *w++ = (char)c;
             r += 3;
         } else {
             *w++ = *r++;
         }
     }
     *w = '\0';
+    return 0;
 }
 
 /**
@@ -73,7 +80,9 @@ static void percent_decode(char *s)
  *
  * Input:  smb2://[domain;]user:password@server/share/path
  * Output: clean_url = smb2://[domain;]user@server/share/path
- *         password  = decoded password (caller must av_free)
+ *         password  = decoded password, NULL when there is none
+ *         (caller must av_free both, also on failure)
+ * Returns 0, AVERROR(ENOMEM), or AVERROR(EINVAL) for a %00 in the password.
  *
  * Only the authority is read: it ends at the first '/' or '?' after
  * "://", so an '@' or a ':' in the path, a port or an IPv6 host is never
@@ -81,16 +90,18 @@ static void percent_decode(char *s)
  * and the first ':' in it starts the password. Neither the domain nor the
  * user holds a ':', so a ';' after it belongs to the password.
  */
-static char *strip_password_from_url(const char *url, char **out_password)
+static int strip_password_from_url(const char *url, char **out_url,
+                                   char **out_password)
 {
     const char *scheme_end, *auth_start, *auth_end, *at_sign = NULL, *colon, *p;
     char *clean;
 
+    *out_url = NULL;
     *out_password = NULL;
 
     scheme_end = strstr(url, "://");
     if (!scheme_end)
-        return av_strdup(url);
+        goto unchanged;
     auth_start = scheme_end + 3;
     auth_end = auth_start + strcspn(auth_start, "/?");
 
@@ -98,16 +109,18 @@ static char *strip_password_from_url(const char *url, char **out_password)
         if (*p == '@')
             at_sign = p;
     if (!at_sign)
-        return av_strdup(url);
+        goto unchanged;
 
     colon = memchr(auth_start, ':', at_sign - auth_start);
     if (!colon)
-        return av_strdup(url);
+        goto unchanged;
 
     /* Extract and decode password */
     *out_password = av_strndup(colon + 1, at_sign - colon - 1);
-    if (*out_password)
-        percent_decode(*out_password);
+    if (!*out_password)
+        return AVERROR(ENOMEM);
+    if (percent_decode(*out_password) < 0)
+        return AVERROR(EINVAL);
 
     /* Build clean URL: everything before ':' + everything from '@' onwards */
     {
@@ -115,12 +128,17 @@ static char *strip_password_from_url(const char *url, char **out_password)
         int suffix_len = (int)strlen(at_sign);
         clean = av_malloc(prefix_len + suffix_len + 1);
         if (!clean)
-            return NULL;
+            return AVERROR(ENOMEM);
         memcpy(clean, url, prefix_len);
         memcpy(clean + prefix_len, at_sign, suffix_len);
         clean[prefix_len + suffix_len] = '\0';
     }
-    return clean;
+    *out_url = clean;
+    return 0;
+
+unchanged:
+    *out_url = av_strdup(url);
+    return *out_url ? 0 : AVERROR(ENOMEM);
 }
 
 static av_cold int libsmb2_close(URLContext *h)
@@ -166,11 +184,11 @@ static av_cold int libsmb2_connect(URLContext *h, struct smb2_url **out_url)
     smb2_set_authentication(ctx->smb2, 1); /* 1 = SMB2_SEC_NTLMSSP */
 
     /* Strip password from URL before parsing (libsmb2 doesn't handle user:pass@) */
-    clean_url = strip_password_from_url(h->filename, &url_password);
-    if (!clean_url) {
-        ret = AVERROR(ENOMEM);
+    ret = strip_password_from_url(h->filename, &clean_url, &url_password);
+    if (ret == AVERROR(EINVAL))
+        av_log(h, AV_LOG_ERROR, "SMB2 URL password holds a %%00 escape\n");
+    if (ret < 0)
         goto fail;
-    }
 
     /* libsmb2's parser expects "smb://" not "smb2://" — rewrite the scheme */
     if (!strncmp(clean_url, "smb2://", 7)) {
@@ -197,14 +215,14 @@ static av_cold int libsmb2_connect(URLContext *h, struct smb2_url **out_url)
      * already decoded by strip_password_from_url; the server host is left as-is.
      * percent_decode() only shrinks the string, so editing the parser's buffers
      * in place is safe (smb2_destroy_url still frees them). */
-    if (url->user)
-        percent_decode(url->user);
-    if (url->domain)
-        percent_decode(url->domain);
-    if (url->share)
-        percent_decode(url->share);
-    if (url->path)
-        percent_decode(url->path);
+    if ((url->user   && percent_decode((char *)url->user)   < 0) ||
+        (url->domain && percent_decode((char *)url->domain) < 0) ||
+        (url->share  && percent_decode((char *)url->share)  < 0) ||
+        (url->path   && percent_decode((char *)url->path)   < 0)) {
+        av_log(h, AV_LOG_ERROR, "SMB2 URL holds a %%00 escape\n");
+        ret = AVERROR(EINVAL);
+        goto fail;
+    }
 
     if (url->user)
         smb2_set_user(ctx->smb2, url->user);
