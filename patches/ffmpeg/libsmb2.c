@@ -39,6 +39,11 @@
 #include "libavutil/opt.h"
 #include "url.h"
 
+/* With no "timeout" (mpv's network-timeout 0), the connect still gets this
+ * many seconds: negotiate, session setup and tree connect, and a NAS that
+ * wakes up. */
+#define LIBSMB2_CONNECT_TIMEOUT 30
+
 typedef struct {
     const AVClass *class;
     struct smb2_context *smb2;
@@ -175,10 +180,15 @@ static av_cold int libsmb2_connect(URLContext *h, struct smb2_url **out_url)
     }
 
     /* "timeout" is in microseconds, as for tcp and http (mpv passes
-     * network-timeout * 1e6); libsmb2 counts whole seconds. */
+     * network-timeout * 1e6); libsmb2 counts whole seconds. With none,
+     * libsmb2 gave the TCP connect only until time() ticked over and the
+     * replies no limit: the connect gets LIBSMB2_CONNECT_TIMEOUT, and the
+     * calls after it keep no limit, like tcp's rw_timeout. */
     if (ctx->timeout > 0)
         smb2_set_timeout(ctx->smb2,
                          (int)(((int64_t)ctx->timeout + 999999) / 1000000));
+    else
+        smb2_set_timeout(ctx->smb2, LIBSMB2_CONNECT_TIMEOUT);
 
     /* Force NTLM authentication — GSSAPI/Kerberos fails in sandboxed apps */
     smb2_set_authentication(ctx->smb2, 1); /* 1 = SMB2_SEC_NTLMSSP */
@@ -245,6 +255,10 @@ static av_cold int libsmb2_connect(URLContext *h, struct smb2_url **out_url)
         ret = AVERROR(EIO);
         goto fail;
     }
+    /* A request takes its deadline when it is queued, so this clears it
+     * only for the requests after the connect. */
+    if (ctx->timeout <= 0)
+        smb2_set_timeout(ctx->smb2, 0);
 
     *out_url = url;
     return 0;
