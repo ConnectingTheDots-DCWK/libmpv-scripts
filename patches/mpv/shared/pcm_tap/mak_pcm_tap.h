@@ -21,16 +21,18 @@ struct ao;
 struct mpv_node;
 
 /* Called from ao_post_process_data() in audio/out/ao.c on every
- * AO chunk. No-op until a read armed the tap, and for non-PCM
+ * AO chunk. No-op while the tap is not armed (before the first
+ * read, and after an idle span without reads) and for non-PCM
  * (passthrough) formats. */
 void mak_pcm_tap_write(struct ao *ao, void **data, int num_samples);
 
 /* Builds an MPV_FORMAT_NODE_MAP describing the most recent
  * `max_samples` samples (per channel) in the ring, and arms the
- * tap. Returns 0 on success and -1 when the ring is empty or the
- * format is unset. The tree is talloc'd from a NULL root (`parent`
- * is unused); the caller hands the node to the property machinery,
- * which frees it. */
+ * tap (after an idle span, with an empty ring). Returns 0 on
+ * success and -1 when the ring is empty or the format is unset.
+ * The tree is talloc'd from a NULL root (`parent` is unused); the
+ * caller hands the node to the property machinery, which frees
+ * it. */
 int mak_pcm_tap_read(struct mpv_node *out, int max_samples,
                      void *parent);
 

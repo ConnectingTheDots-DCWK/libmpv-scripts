@@ -21,7 +21,7 @@
 /* 256 KiB of Float32: ~680 ms at 48 kHz stereo. A read returns at
  * most the latest 4096 frames (32 KB in stereo). The cap is a
  * static upper bound; the valid bytes track what the AO has
- * produced since the last format change (`valid_bytes`). */
+ * produced since the last format change or re-arm (`valid_bytes`). */
 #define MAK_PCM_TAP_CAPACITY (256 * 1024)
 
 /* Scratch buffer for format conversion. 64K floats = 256 KB —
@@ -53,11 +53,17 @@ struct mak_pcm_tap {
 static mp_mutex g_tap_lock = MP_STATIC_MUTEX_INITIALIZER;
 static struct mak_pcm_tap g_tap;
 
-/* Lazy-activation gate. Set the first time a client reads the tap
- * (the visualizer frame); until then the AO-thread write path returns
- * immediately, so the per-sample convert + ring memcpy cost nothing
- * for the common case where nothing consumes the tap. */
-static atomic_bool g_tap_armed = false;
+/* Activation gate. Every read stamps g_tap_read_ns. The AO-thread
+ * write path returns at once until the first read, and again once
+ * no read came for g_tap_idle_ns: when the listener goes away
+ * (cancel, Player dispose, hot restart) the per-chunk convert and
+ * copy stop. The idle span is 4 read periods, at least
+ * MAK_PCM_TAP_IDLE_NS, so a slow poll keeps the tap armed. The
+ * first read after an idle span re-arms it and empties the ring:
+ * what the ring held is from before, maybe from another track. */
+#define MAK_PCM_TAP_IDLE_NS (INT64_C(2) * 1000000000)
+static atomic_int_least64_t g_tap_read_ns;   /* 0: never read */
+static atomic_int_least64_t g_tap_idle_ns;
 
 /* Format normalisation: every supported PCM format → interleaved
  * Float32 in `dst`. Returns the number of float samples written
@@ -167,10 +173,15 @@ void mak_pcm_tap_write(struct ao *ao, void **data, int num_samples)
 {
     if (!ao || !data || num_samples <= 0)
         return;
-    /* Lazy activation — skip everything until a client has read the
-     * tap at least once. Relaxed: a one-chunk delay in seeing the arm
-     * only blanks the very first frame, which is imperceptible. */
-    if (!atomic_load_explicit(&g_tap_armed, memory_order_relaxed))
+    /* Skip everything until a client has read the tap, and once no
+     * read came for the idle span. Relaxed: a one-chunk delay in
+     * seeing a read only blanks one frame, which is imperceptible. */
+    int64_t read_ns = atomic_load_explicit(&g_tap_read_ns,
+                                           memory_order_relaxed);
+    if (!read_ns)
+        return;
+    if (mp_time_ns() - read_ns >
+        atomic_load_explicit(&g_tap_idle_ns, memory_order_relaxed))
         return;
     /* Skip non-PCM (S/PDIF passthrough: AC3, DTS, TrueHD, …):
      * those are opaque codec bytes, not samples we can visualise. */
@@ -236,8 +247,25 @@ int mak_pcm_tap_read(struct mpv_node *out, int max_samples, void *parent)
     if (!out || max_samples <= 0)
         return -1;
 
-    atomic_store_explicit(&g_tap_armed, true, memory_order_relaxed);
+    int64_t now  = mp_time_ns();
+    int64_t prev = atomic_exchange_explicit(&g_tap_read_ns, now,
+                                            memory_order_relaxed);
+    int64_t idle = atomic_load_explicit(&g_tap_idle_ns,
+                                        memory_order_relaxed);
+    bool rearm = !prev || now - prev > idle;
+    int64_t next_idle = prev ? 4 * (now - prev) : 0;
+    if (next_idle < MAK_PCM_TAP_IDLE_NS)
+        next_idle = MAK_PCM_TAP_IDLE_NS;
+    atomic_store_explicit(&g_tap_idle_ns, next_idle, memory_order_relaxed);
+
     mp_mutex_lock(&g_tap_lock);
+
+    /* The writes stopped during the idle span: start over, so the
+     * reader never gets a window from before it. */
+    if (rearm) {
+        g_tap.write_pos   = 0;
+        g_tap.valid_bytes = 0;
+    }
 
     int channels = g_tap.channels;
     int rate     = g_tap.sample_rate;

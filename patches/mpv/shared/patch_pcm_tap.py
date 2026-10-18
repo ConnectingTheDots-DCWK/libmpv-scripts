@@ -30,7 +30,9 @@ Tap point
 `audio/out/ao.c::ao_post_process_data()` runs after the af chain and
 the per-AO software volume gain, on every chunk every AO consumes
 (both push and pull drivers route through it). One memcpy per AO
-chunk, ~one per ~10 ms at 48 kHz / 2 ch / 480-frame buffers.
+chunk, ~one per ~10 ms at 48 kHz / 2 ch / 480-frame buffers, and only
+while the tap is armed: from the first read until no read came for
+4 read periods, at least 2 s (the listener went away).
 
 Property
 ========
@@ -43,10 +45,12 @@ Property
                                      samples, the latest 4096 frames
                                      at most, ~85 ms at 48 kHz)
                      M_PROPERTY_UNAVAILABLE until the tap is armed (the
-                     first read arms it) and the output has written PCM
-                     since. Any PCM format works (see below). A change
-                     of channel count or rate empties the ring, so the
-                     first reads after it return a shorter window.
+                     first read arms it, and the first one after an idle
+                     span re-arms it with an empty ring) and the output
+                     has written PCM since. Any PCM format works (see
+                     below). A change of channel count or rate empties
+                     the ring, so the first reads after it return a
+                     shorter window.
 
 Format coverage
 ===============
