@@ -2,7 +2,8 @@
 # All rights reserved.
 # Use of this source code is governed by BSD 3-Clause license that can be found in the LICENSE file.
 
-"""Fix the Android AudioTrack output (audio/out/ao_audiotrack.c).
+"""Fix the Android AudioTrack output (audio/out/ao_audiotrack.c, and the
+paused delay of audio/out/buffer.c that its set_pause brings out).
 
 audiotrack is mpv's default output on Android. Its thread pulls a chunk of
 75 to 150 ms from mpv's buffer and writes it to the AudioTrack with a
@@ -39,11 +40,23 @@ blocking write, which paces the loop while there is audio.
    the rest of a cut chunk and writes it first on the resume. A reset in
    between (a seek or a stop) drops it.
 
+4. Paused delay. For a pull output paused in hardware, buffer.c kept the
+   delay of the audio the device held in queued_time_ns, but ao_get_delay
+   still read it off the clock (end_time_ns minus now). Paused, the delay
+   ran down and the position crept ahead by what the track held (about
+   140 ms on audiotrack), then went back as much on the resume; every read
+   that woke the core moved it. ao_get_delay now returns the saved delay
+   while paused, and the pause and the resume set it under the buffer lock,
+   with hw_paused, so a read in between never sees the old one.
+
 Each fix has its own marker and runs once. All anchors are checked before
 the file is written, so a mismatch leaves the tree as it was.
 
-Android only: the file is compiled only there, so the patch is applied from
-build_libmpv_android.sh, gated on the `audiotrack` patch id.
+Android only: ao_audiotrack.c is compiled only there, so the patch is
+applied from build_libmpv_android.sh, gated on the `audiotrack` patch id.
+Fix 4 changes shared code, but only the Android build gets it: there the
+paused delay is the size of an AudioTrack buffer, on the desktop outputs a
+few milliseconds.
 
 Usage: patch_audiotrack.py <mpv source dir>
 """
@@ -52,21 +65,24 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-path = Path(sys.argv[1]) / "audio/out/ao_audiotrack.c"
-text = path.read_text()
-original = text
+root = Path(sys.argv[1])
+files = {name: (root / "audio/out" / name).read_text()
+         for name in ("ao_audiotrack.c", "buffer.c")}
+originals = dict(files)
 
 
-def edit(marker: str, edits: list[tuple[str, str]]) -> None:
-    global text
+def edit(marker: str, edits: list[tuple[str, str]],
+         name: str = "ao_audiotrack.c") -> None:
+    text = files[name]
     if marker in text:
         print(f"Already patched: {marker}")
         return
     for old, new in edits:
         if text.count(old) != 1:
-            sys.exit(f"patch_audiotrack: anchor not found once in {path} "
-                     f"({marker}): {old!r}")
+            sys.exit(f"patch_audiotrack: anchor not found once in "
+                     f"{root / 'audio/out' / name} ({marker}): {old!r}")
         text = text.replace(old, new, 1)
+    files[name] = text
 
 
 # ── 1. Idle: wait instead of spinning when there is nothing to write ────────
@@ -256,6 +272,51 @@ edit(PAUSE, [
     ),
 ])
 
-if text != original:
-    path.write_text(text)
-    print(f"Patched: {path}")
+# ── 4. Paused delay: the delay saved at the pause, read under the lock ──────
+DELAY = "MAK_AUDIOTRACK_PAUSED_DELAY_PATCH_V1"
+edit(DELAY, [
+    (
+        "    } else {\n"
+        "        int64_t end = p->end_time_ns;\n",
+        f"    }} else if (p->hw_paused) {{\n"
+        f"        // {DELAY}: paused in\n"
+        "        // hardware, the device plays nothing: the delay is the one\n"
+        "        // saved at the pause, not one that runs down on the clock.\n"
+        "        driver_delay = MPMAX(0, MP_TIME_NS_TO_S(p->queued_time_ns));\n"
+        "    } else {\n"
+        "        int64_t end = p->end_time_ns;\n",
+    ),
+    (
+        "                is_hw_paused = p->hw_paused = !!ao->driver->set_pause;\n",
+        "                is_hw_paused = p->hw_paused = !!ao->driver->set_pause;\n"
+        f"                // {DELAY}: saved\n"
+        "                // with hw_paused, under the lock ao_get_delay takes.\n"
+        "                if (is_hw_paused)\n"
+        "                    p->queued_time_ns = p->end_time_ns - mp_time_ns();\n",
+    ),
+    (
+        "            is_hw_paused = p->hw_paused;\n"
+        "            p->hw_paused = false;\n",
+        "            is_hw_paused = p->hw_paused;\n"
+        "            p->hw_paused = false;\n"
+        f"            // {DELAY}\n"
+        "            if (is_hw_paused)\n"
+        "                p->end_time_ns = p->queued_time_ns + mp_time_ns();\n",
+    ),
+    (
+        "                ao->driver->set_pause(ao, true);\n"
+        "                p->queued_time_ns = p->end_time_ns - mp_time_ns();\n"
+        "            } else {\n"
+        "                p->end_time_ns = p->queued_time_ns + mp_time_ns();\n"
+        "                ao->driver->set_pause(ao, false);\n",
+        "                ao->driver->set_pause(ao, true);\n"
+        "            } else {\n"
+        "                ao->driver->set_pause(ao, false);\n",
+    ),
+], "buffer.c")
+
+for name, text in files.items():
+    if text != originals[name]:
+        out = root / "audio/out" / name
+        out.write_text(text)
+        print(f"Patched: {out}")
