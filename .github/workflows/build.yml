@@ -315,20 +315,21 @@ jobs:
   # The native tests of the patches, with AddressSanitizer: a debug libmpv
   # with every mpv patch, built against Ubuntu's FFmpeg 6.1, runs the C and
   # white-box tests of verify/tests/native and the patch script tests of
-  # verify/tests/patches (run.sh); then the FFmpeg filter bounds check on a
-  # minimal FFmpeg 8.1.1. Not in the needs of release, as for tui. A failure
+  # verify/tests/patches (run.sh); then, each on a minimal FFmpeg 8.1.1, the
+  # filter bounds check and the SMB and TLS checks against impacket's server
+  # (network_test.sh). Not in the needs of release, as for tui. A failure
   # uploads the logs as native-test-logs.
   native:
     name: Native tests (ASan)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - name: Install meson, ninja and FFmpeg
+      - name: Install meson, ninja, cmake, FFmpeg and OpenSSL
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends meson ninja-build pkg-config ffmpeg \
+          sudo apt-get install -y --no-install-recommends meson ninja-build cmake pkg-config ffmpeg \
             libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev libswresample-dev \
-            libswscale-dev zlib1g-dev
+            libswscale-dev zlib1g-dev libssl-dev openssl python3-venv
       # The ASan runtime of gcc 13 can crash at start with the 32 bits of
       # mmap randomness of newer kernels.
       - name: Fewer mmap random bits for ASan
@@ -338,6 +339,13 @@ jobs:
       - name: FFmpeg filter bounds
         if: ${{ !cancelled() }}
         run: CC=gcc FFMPEG_TOOLCHAIN=gcc-asan JOBS=4 bash verify/tests/filter_bounds_test.sh builds/filter-bounds
+      # impacket is the SMB server of the test, pinned, in a venv of its own.
+      - name: FFmpeg SMB and TLS
+        if: ${{ !cancelled() }}
+        run: |
+          python3 -m venv builds/impacket
+          builds/impacket/bin/pip install --quiet impacket==0.13.1
+          SMB_PYTHON="$PWD/builds/impacket/bin/python" JOBS=4 bash verify/tests/network_test.sh builds/network
       - if: failure()
         uses: actions/upload-artifact@v7
         with:
@@ -347,4 +355,6 @@ jobs:
             builds/native-tests/runs/*.log
             builds/filter-bounds/*.log
             builds/filter-bounds/*.err
+            builds/network/logs/
+            builds/network/runs/*.log*
           if-no-files-found: ignore
