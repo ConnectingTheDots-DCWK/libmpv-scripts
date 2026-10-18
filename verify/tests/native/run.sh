@@ -236,7 +236,9 @@ compile() { # compile <kind> <test>: builds $BIN/<test>, 0 on success
       rm -rf "$o"; mkdir -p "$o/audio/out" "$o/jni"
       ln -s "$jni" "$o/jni/jni.h"
       cp "$SRC"/audio/out/*.h "$o/audio/out/"
-      cp "$WORK/mpv/audio/out/ao_audiotrack.c" "$o/audio/out/"
+      # The patch also edits buffer.c (the paused delay); the test builds the
+      # driver only, but the patch wants both files to apply.
+      cp "$WORK/mpv/audio/out/ao_audiotrack.c" "$WORK/mpv/audio/out/buffer.c" "$o/audio/out/"
       python3 -B "$AUDIOTRACK_PATCH" "$o" > "$log" 2>&1 || return 1
       "$CC" -g -O1 -std=gnu11 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -fsanitize=address \
         -Wall -Wno-unused-function -I"$o" -I"$SRC" -I"$SRC/include" -I"$BLD" -idirafter "$o/jni" \
