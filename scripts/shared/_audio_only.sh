@@ -8,7 +8,8 @@
 # Strategy: keep all demuxers + protocols (so the consumer can open
 # any container, including mixed audio+video files like .mkv/.mp4 —
 # mpv ignores video tracks and decodes only audio); strip out video
-# decoders/encoders/muxers and swscale; drop avdevice (no
+# decoders/encoders and swscale; keep only the spdif muxer, which
+# audio-spdif passthrough wraps AC3/DTS in; drop avdevice (no
 # capture/output devices needed for a playback-only library).
 #
 # A curated audio-filter whitelist is enabled (AUDIO_FILTERS, ~86 entries) via
@@ -282,6 +283,7 @@ ${_swscale_flag}
 --enable-decoder=$AUDIO_DECODERS
 --disable-encoders
 --disable-muxers
+--enable-muxer=spdif
 --disable-filters
 --enable-filter=$AUDIO_FILTERS
 --disable-parsers
@@ -405,6 +407,10 @@ verify_ffmpeg_config() {
   case "$platform" in
     macos|ios) assert_define "$cfg" "CONFIG_SECURETRANSPORT" "0" ;;
   esac
+
+  # The spdif muxer behind audio-spdif. Without it ad_spdif drops every
+  # packet with no log, so a passthrough file plays nothing.
+  assert_define "$cmp" "CONFIG_SPDIF_MUXER" "1"
 
   # Full 1:1 audit: EVERY selected decoder and filter must have actually
   # compiled (CONFIG_X=1). This catches a flag that passed ./configure but
