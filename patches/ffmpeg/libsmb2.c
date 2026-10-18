@@ -74,10 +74,16 @@ static void percent_decode(char *s)
  * Input:  smb2://[domain;]user:password@server/share/path
  * Output: clean_url = smb2://[domain;]user@server/share/path
  *         password  = decoded password (caller must av_free)
+ *
+ * Only the authority is read: it ends at the first '/' or '?' after
+ * "://", so an '@' or a ':' in the path, a port or an IPv6 host is never
+ * taken for credentials. The last '@' of the authority ends the userinfo,
+ * and the first ':' in it starts the password. Neither the domain nor the
+ * user holds a ':', so a ';' after it belongs to the password.
  */
 static char *strip_password_from_url(const char *url, char **out_password)
 {
-    const char *scheme_end, *auth_start, *at_sign, *colon;
+    const char *scheme_end, *auth_start, *auth_end, *at_sign = NULL, *colon, *p;
     char *clean;
 
     *out_password = NULL;
@@ -86,21 +92,16 @@ static char *strip_password_from_url(const char *url, char **out_password)
     if (!scheme_end)
         return av_strdup(url);
     auth_start = scheme_end + 3;
+    auth_end = auth_start + strcspn(auth_start, "/?");
 
-    /* skip optional domain; prefix */
-    {
-        const char *semi = strchr(auth_start, ';');
-        const char *slash = strchr(auth_start, '/');
-        if (semi && (!slash || semi < slash))
-            auth_start = semi + 1;
-    }
-
-    at_sign = strchr(auth_start, '@');
+    for (p = auth_start; p < auth_end; p++)
+        if (*p == '@')
+            at_sign = p;
     if (!at_sign)
         return av_strdup(url);
 
-    colon = strchr(auth_start, ':');
-    if (!colon || colon > at_sign)
+    colon = memchr(auth_start, ':', at_sign - auth_start);
+    if (!colon)
         return av_strdup(url);
 
     /* Extract and decode password */
