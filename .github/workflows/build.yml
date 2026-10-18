@@ -324,12 +324,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - name: Install meson, ninja, cmake, FFmpeg and OpenSSL
+      # mpv includes the libplacebo headers (video/csputils.h) even with
+      # libplacebo optional: the release builds have them from source.
+      - name: Install meson, ninja, cmake, FFmpeg, libplacebo and OpenSSL
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends meson ninja-build cmake pkg-config ffmpeg \
             libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev libswresample-dev \
-            libswscale-dev zlib1g-dev libssl-dev openssl python3-venv
+            libswscale-dev libplacebo-dev zlib1g-dev libssl-dev openssl python3-venv
       # The ASan runtime of gcc 13 can crash at start with the 32 bits of
       # mmap randomness of newer kernels.
       - name: Fewer mmap random bits for ASan
