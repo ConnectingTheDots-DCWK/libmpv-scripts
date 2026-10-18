@@ -61,6 +61,7 @@ func patchesCatalog() []PatchItem {
 		{ID: "lavfi_eof_passthrough", Title: "EOF before data through lavfi", Desc: "Pass an EOF that reaches a new audio filter before any data straight on, so a filter that takes no float (hdcd) is not disabled", Category: "mpv runtime", DefaultOn: true},
 		{ID: "hotplug_core_thread", Title: "Audio output and hotplug on the core thread", Desc: "Close the audio output and the audio device watcher on the thread that created them, so a libmpv destroyed from another thread does not crash on Windows (WASAPI is COM)", Category: "mpv runtime", DefaultOn: true},
 		{ID: "playlist_prev_dos_path", Title: "playlist-prev-playlist on Windows paths", Desc: "Build the playlist-path prefixes as copies, so playlist-prev-playlist does not touch freed memory on Windows", Category: "mpv runtime", DefaultOn: true},
+		{ID: "chapter_list_reset", Title: "Current chapter after a new chapter-list", Desc: "Forget the last chapter seek when chapter-list is set, so a shorter list does not leave chapter past its end or make chapter-metadata read beyond it (a crash)", Category: "mpv runtime", DefaultOn: true},
 		{ID: "timer_resolution", Title: "Windows timer-resolution fix", Desc: "Stop mpv pinning the system-wide 1 ms timer at init (it fights DWM frame-pacing → host UI micro-stutter). No-op on non-Windows targets.", Category: "mpv runtime", DefaultOn: true},
 
 		// ── FFmpeg (applied via apply_ffmpeg_patches) ───────────────────────

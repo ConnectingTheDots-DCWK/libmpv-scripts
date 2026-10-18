@@ -726,6 +726,7 @@ apply_mpv_patches_common() {
   _mpv_patch lavfi_eof_passthrough patch_lavfi_eof_passthrough.py "$mpv_dir"
   _mpv_patch hotplug_core_thread patch_hotplug_core_thread.py "$mpv_dir"
   _mpv_patch playlist_prev_dos_path patch_playlist_prev_dos_path.py "$mpv_dir"
+  _mpv_patch chapter_list_reset patch_chapter_list_reset.py "$mpv_dir"
   # NOTE: the `timer_resolution` patch is Windows-only (it edits the
   # win32-only osdep/timer-win32.c), so it lives in patches/mpv/windows/ and
   # is applied — still toggleable via `patch_on timer_resolution` — inline in

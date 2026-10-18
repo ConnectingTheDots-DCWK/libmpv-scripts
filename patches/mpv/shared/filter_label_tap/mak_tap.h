@@ -3,11 +3,12 @@
  * mak_tap maintains a fixed-size table of "active taps" (a tap
  * being a combination of chain label + side). For each active
  * tap, two ring buffers (pre / post) accumulate the most recent
- * ~340 ms of post-conversion Float32 samples plus the playback
- * PTS at the most-recently-written sample. The audio chain
- * calls mak_tap_write() from inside user_wrapper_process for
- * every frame the user filter handles; the call short-circuits
- * when the filter is not in the active set.
+ * 3 s (at most 16 MB per ring) of post-conversion Float32 samples
+ * plus the playback PTS at the most-recently-written sample. The
+ * audio chain, on the core thread, calls mak_tap_write() from
+ * inside user_wrapper_process for every frame the user filter
+ * handles; the call short-circuits when the filter is not in the
+ * active set.
  *
  * Reads are aligned to a caller-supplied playback PTS so the
  * visualiser sees the slice of audio that the AO is playing

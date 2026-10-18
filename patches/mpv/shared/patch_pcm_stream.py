@@ -58,6 +58,13 @@ selects itself; the app passes the format as file-local options
   The entry opens when it starts; the app buffers it meanwhile.
 - force-seekable does not apply to a mak-pcm stream: a forward seek in
   demux_raw skips by reading, which would throw live PCM away.
+- A mak-pcm entry plays once, from start to end. With loop-file or an A-B
+  loop on, mpv queued a seek back at its end; the seek failed (the stream
+  cannot seek and the cache keeps no back buffer), and the next pass of the
+  playloop queued it again, with the core spinning and the entry never
+  ending. At its end its loops are dropped once, with a warning. An end
+  that came from the B point plays on to the real end; then the entry ends
+  as with no loop (the keep-open park or the next entry).
 - Only mpv's portable thread primitives (mp_mutex, mp_cond, mp_cancel),
   so it builds on every platform.
 
@@ -81,6 +88,8 @@ Files patched
     demux/packet.c            demux_packet_shorten shortens the AVPacket too
     demux/demux.c             force-seekable leaves a mak-pcm stream unseekable
     player/loadfile.c         prefetch skips a mak-pcm entry
+    player/playloop.c         a mak-pcm entry drops its loops at its end and
+                              plays on past an A-B loop's B point
     meson.build               new sources added to the build
 
 Usage
@@ -204,6 +213,45 @@ LOADFILE_C = [
      '        return;\n'),
 ]
 
+# ─── player/playloop.c ───────────────────────────────────────────────
+
+# handle_loop_file runs when the entry reached its end. mpctx->filename is
+# the entry that plays (the demuxer the player sees has no stream).
+PLAYLOOP_C = [
+    ('handle_loop_file head',
+     'static void handle_loop_file(struct MPContext *mpctx)\n'
+     '{\n'
+     '    if (mpctx->stop_play != AT_END_OF_FILE)\n'
+     '        return;\n',
+     'static void handle_loop_file(struct MPContext *mpctx)\n'
+     '{\n'
+     '    if (mpctx->stop_play != AT_END_OF_FILE)\n'
+     '        return;\n'
+     '\n'
+     '    /* ' + MARKER + ': a live PCM entry was read once and cannot\n'
+     '     * seek back. A loop seek would fail and be queued again on every\n'
+     '     * pass, so its loops are dropped once and it plays to its end. */\n'
+     '    if (mpctx->filename &&\n'
+     '        bstr_case_startswith(bstr0(mpctx->filename), bstr0("mak-pcm://")))\n'
+     '    {\n'
+     '        double ab[2];\n'
+     '        bool ab_end = get_ab_loop_times(mpctx, ab) && mpctx->ab_loop_clip;\n'
+     '        if (ab_end || mpctx->remaining_file_loops) {\n'
+     '            MP_WARN(mpctx, "A live PCM source cannot loop, it plays once.\\n");\n'
+     '            mpctx->remaining_file_loops = 0;\n'
+     '            mpctx->remaining_ab_loops = 0;\n'
+     '            mp_notify_property(mpctx, "remaining-file-loops");\n'
+     '            mp_notify_property(mpctx, "remaining-ab-loops");\n'
+     '        }\n'
+     '        if (ab_end) {\n'
+     '            /* The end was the B point: what follows it still plays. */\n'
+     '            mpctx->stop_play = KEEP_PLAYING;\n'
+     '            mp_wakeup_core(mpctx);\n'
+     '        }\n'
+     '        return;\n'
+     '    }\n'),
+]
+
 # ─── meson.build ──────────────────────────────────────────────────────
 
 MESON = [
@@ -245,6 +293,7 @@ def main():
     replace_once(os.path.join(src, 'demux', 'packet.c'), PACKET_C)
     replace_once(os.path.join(src, 'demux', 'demux.c'), DEMUX_C)
     replace_once(os.path.join(src, 'player', 'loadfile.c'), LOADFILE_C)
+    replace_once(os.path.join(src, 'player', 'playloop.c'), PLAYLOOP_C)
     replace_once(os.path.join(src, 'meson.build'), MESON)
 
 
