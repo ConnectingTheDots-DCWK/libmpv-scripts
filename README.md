@@ -250,6 +250,8 @@ The Manifest action in the Tools tab writes `builds/release/manifest.json` for a
 
 The patches have tests of their own: `bash verify/tests/native/run.sh <work dir>` builds a debug libmpv with AddressSanitizer against the system FFmpeg and runs the C tests of the patched mpv, then the tests of the patch scripts. It needs meson, ninja, the `ffmpeg` command and the FFmpeg development files, and takes a few minutes.
 
+`bash verify/tests/network_test.sh <work dir>` builds libsmb2 and a minimal FFmpeg with AddressSanitizer and the SMB and TLS patches, then checks them against a local impacket SMB server and `openssl s_server`: the URL parsing, a stop while the server stalls, the connect deadline and the embedded CA roots. It needs cmake, ninja, the OpenSSL development files and impacket for the python in `SMB_PYTHON`, and takes about two minutes.
+
 #### 4.4 Publishing a release
 
 1. Build all nine libraries, usually by pushing a `release/` branch (see [3.5](#35-on-github-actions)).
