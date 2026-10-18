@@ -633,9 +633,9 @@ build_ffmpeg() {
   # ── ffmpeg: smart audio-only build ─────────────────────────────────────────
   # See scripts/shared/_audio_only.sh for AUDIO_DECODERS / AUDIO_PARSERS /
   # AUDIO_FILTERS / AUDIO_BSFS.
-  # Strategy: keep all demuxers + protocols; strip video decoders /
-  # encoders / muxers / avdevice. A curated audio-filter whitelist stays enabled
-  # (AUDIO_FILTERS, ~86 entries, ~50 KB total)
+  # Strategy: keep all demuxers and a protocol whitelist; strip video
+  # decoders, encoders, every muxer but spdif, and avdevice. A curated
+  # audio-filter whitelist stays enabled (AUDIO_FILTERS, ~86 entries, ~50 KB total)
   # so `setCustomAudioFilters` has full coverage. swscale stays enabled because
   # mpv requires it as a mandatory dependency (cover-art pipeline).
 

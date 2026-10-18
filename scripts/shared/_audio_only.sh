@@ -5,9 +5,10 @@
 # Audio-only ffmpeg flags + shared patch application across the 5
 # build_libmpv_<platform>.sh scripts. Sourced by every script.
 #
-# Strategy: keep all demuxers + protocols (so the consumer can open
-# any container, including mixed audio+video files like .mkv/.mp4 —
-# mpv ignores video tracks and decodes only audio); strip out video
+# Strategy: keep all demuxers (so the consumer can open any container,
+# including mixed audio+video files like .mkv/.mp4 — mpv ignores video
+# tracks and decodes only audio); protocols are a whitelist (see
+# --enable-protocol in ffmpeg_common_args); strip out video
 # decoders/encoders and swscale; keep only the spdif muxer, which
 # audio-spdif passthrough wraps AC3/DTS in; drop avdevice (no
 # capture/output devices needed for a playback-only library).
@@ -277,7 +278,7 @@ ${_small_flag}
 ${_swscale_flag}
 --disable-avdevice
 --disable-protocols
---enable-protocol=file,http,https,tcp,udp,tls,data,pipe,async,cache,crypto,subfile${_smb2_proto}
+--enable-protocol=file,http,https,httpproxy,tcp,udp,tls,data,pipe,async,cache,crypto,subfile${_smb2_proto}
 --enable-demuxers
 --disable-decoders
 --enable-decoder=$AUDIO_DECODERS
@@ -411,6 +412,12 @@ verify_ffmpeg_config() {
   # The spdif muxer behind audio-spdif. Without it ad_spdif drops every
   # packet with no log, so a passthrough file plays nothing.
   assert_define "$cmp" "CONFIG_SPDIF_MUXER" "1"
+  # An https source opens https over tls, and through http-proxy (or the
+  # http_proxy variable) tls opens an httpproxy:// URL: without httpproxy
+  # every https source fails with "Protocol not found" behind a proxy.
+  assert_define "$cmp" "CONFIG_HTTPS_PROTOCOL"     "1"
+  assert_define "$cmp" "CONFIG_TLS_PROTOCOL"       "1"
+  assert_define "$cmp" "CONFIG_HTTPPROXY_PROTOCOL" "1"
 
   # Full 1:1 audit: EVERY selected decoder and filter must have actually
   # compiled (CONFIG_X=1). This catches a flag that passed ./configure but
