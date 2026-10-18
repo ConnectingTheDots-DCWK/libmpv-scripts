@@ -98,6 +98,7 @@ PATCH_TESTS=(
   "audiotrack_patch_test {mpv} {src} {build}"
   "apply_order_test {mpv}"
   "libsmb2_patch_test {ffmpeg}"
+  "embed_cacert_patch_test {ffmpeg}"
   "filter_bounds_anchor_test {ffmpeg}"
 )
 AUDIOTRACK_PATCH="$ROOT/patches/mpv/android/patch_audiotrack.py"
