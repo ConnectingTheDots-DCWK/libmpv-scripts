@@ -214,7 +214,7 @@ To build another version of a dependency, set `MPV_VERSION`, `FFMPEG_VERSION` an
 
 #### 3.5 On GitHub Actions
 
-Every push to a `release/` branch runs `.github/workflows/build.yml`, which builds all nine libraries on GitHub's runners, Apple included, with `STRICT_SOURCES=1`. The run ends with a `libmpv-release` artifact holding the libraries and `manifest.json`, then checks them as in [4.3](#43-verifying). It also plays a tone with the Linux x86_64 library in a bare Debian 11 container, without PipeWire and PulseAudio. A build stopped by an unpinned source uploads the line to add as an `unpinned-sources-<job>` artifact.
+Every push to a `release/` branch runs `.github/workflows/build.yml`, which builds all nine libraries on GitHub's runners, Apple included, with `STRICT_SOURCES=1`. The run ends with a `libmpv-release` artifact holding the libraries and `manifest.json`, then checks them as in [4.3](#43-verifying). It also plays a tone with the Linux x86_64 library in a bare Debian 11 container, without PipeWire and PulseAudio, and runs the patch tests of [4.3](#43-verifying). A build stopped by an unpinned source uploads the line to add as an `unpinned-sources-<job>` artifact.
 
 ---
 
@@ -247,6 +247,8 @@ The Manifest action in the Tools tab writes `builds/release/manifest.json` for a
 #### 4.3 Verifying
 
 `./build verify` checks every library in `builds/release/`: architecture, exported API, the patched mpv properties, the included decoders and filters, the spdif muxer and the httpproxy, https and tls protocols, that no video code slipped in, and the libraries it depends on. On Linux and Android it also checks the SONAME, that there is no `DT_RELR`, the 16 KB alignment of the 64 bit Android libraries and the glibc 2.31 floor. Where the host can load it, it also opens the library and calls into it. The report has one row per library, and Enter shows the full log.
+
+The patches have tests of their own: `bash verify/tests/native/run.sh <work dir>` builds a debug libmpv with AddressSanitizer against the system FFmpeg and runs the C tests of the patched mpv, then the tests of the patch scripts. It needs meson, ninja, the `ffmpeg` command and the FFmpeg development files, and takes a few minutes.
 
 #### 4.4 Publishing a release
 
