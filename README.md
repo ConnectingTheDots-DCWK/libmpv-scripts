@@ -246,7 +246,7 @@ The Manifest action in the Tools tab writes `builds/release/manifest.json` for a
 
 #### 4.3 Verifying
 
-`./build verify` checks every library in `builds/release/`: architecture, exported API, the patched mpv properties, the included decoders and filters, that no video code slipped in, and the libraries it depends on. On Linux and Android it also checks the SONAME, that there is no `DT_RELR`, the 16 KB alignment of the 64 bit Android libraries and the glibc 2.31 floor. Where the host can load it, it also opens the library and calls into it. The report has one row per library, and Enter shows the full log.
+`./build verify` checks every library in `builds/release/`: architecture, exported API, the patched mpv properties, the included decoders and filters, the spdif muxer and the httpproxy, https and tls protocols, that no video code slipped in, and the libraries it depends on. On Linux and Android it also checks the SONAME, that there is no `DT_RELR`, the 16 KB alignment of the 64 bit Android libraries and the glibc 2.31 floor. Where the host can load it, it also opens the library and calls into it. The report has one row per library, and Enter shows the full log.
 
 #### 4.4 Publishing a release
 

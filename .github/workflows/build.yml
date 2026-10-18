@@ -288,9 +288,10 @@ jobs:
             fi
             builds/audio_fallback_test builds/release/libmpv_linux-x86_64.so /tmp/tone.wav'
 
-  # The TUI's go vet and go test, and the bash check of the L13 exit code
-  # classification. Not in the needs of release: a red test here does not
-  # hold back the binaries, it only shows next to them.
+  # The TUI's go vet and go test, and the bash checks of the L13 exit code
+  # classification and of the FFmpeg component markers. Not in the needs of
+  # release: a red test here does not hold back the binaries, it only shows
+  # next to them.
   tui:
     name: TUI and verify tests
     runs-on: ubuntu-24.04
@@ -308,3 +309,5 @@ jobs:
         run: go test ./...
       - name: L13 exit code classification
         run: bash verify/tests/l13_windows_test.sh
+      - name: FFmpeg muxer and protocol markers
+        run: bash verify/tests/components_test.sh

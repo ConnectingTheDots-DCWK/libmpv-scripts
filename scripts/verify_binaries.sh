@@ -17,6 +17,8 @@
 #   4.  FFmpeg patches present (libsmb2 protocol, mov advanced_editlist)
 #   5.  Required audio decoder whitelist sample present
 #   6.  Required audio filter whitelist sample present
+#  6b.  FFmpeg components no decoder or filter check covers: the spdif muxer
+#       (audio-spdif passthrough) and the httpproxy, https and tls protocols
 #   7.  No forbidden video decoders (audio-only invariant)
 #  7b.  Adaptive feature presence — cross-checks the binary against the
 #       current Settings ▸ Patches strip selection (swscale / libass+fonts /
@@ -176,6 +178,24 @@ MPV_PATCHED_PROPS=(
 FFMPEG_PATCH_MARKERS=(
   "libsmb2|libsmb2 SMB2 protocol patch"
   "advanced_editlist|mov demuxer fragmented-MP4 editlist patch"
+)
+
+# FFmpeg components the kit relies on outside the decoder and filter lists:
+# the spdif muxer behind audio-spdif, and the protocols an https source needs,
+# through an HTTP proxy too. Each entry is "<ERE>|<label>", and the ERE matches
+# a string that only that component's code carries. The bare names do not
+# work: "httpproxy" is also in tls.c and in the http whitelists, and "https"
+# is everywhere.
+#   spdif_flags         : option of the spdif muxer (spdifenc.c)
+#   CONNECT %s HTTP/1.1 : request line of http_proxy_open (http.c)
+#   ...,httpproxy$      : default_whitelist of the https protocol; the http
+#                         one ends in ",data"
+#   Verify against ...  : TLS_COMMON_OPTIONS help (tls.h), in every backend
+FFMPEG_COMPONENT_MARKERS=(
+  "spdif_flags|spdif muxer (audio-spdif passthrough)"
+  "CONNECT %s HTTP/1\.1|httpproxy protocol (https through an HTTP proxy)"
+  "http,https,tls,rtp,tcp,udp,crypto,httpproxy$|https protocol"
+  "Verify against a specific hostname|tls protocol"
 )
 
 mapfile -t REQUIRED_DECODERS < <(echo "$AUDIO_DECODERS" | tr ',' '\n' | head -8)
@@ -1159,6 +1179,19 @@ layer_feature_presence() {
   fi
 }
 
+# Layer 6b: every FFMPEG_COMPONENT_MARKERS entry must be in the binary, on
+# every platform. No patch or selection turns them off.
+# Args: $1 str_text
+layer_ffmpeg_components() {
+  local str="$1" entry marker label
+  phase components
+  for entry in "${FFMPEG_COMPONENT_MARKERS[@]}"; do
+    marker="${entry%%|*}"; label="${entry#*|}"
+    if grep -qE -- "$marker" <<<"$str"; then pass "ffmpeg component present: $label"
+    else fail "ffmpeg component MISSING: $label"; fi
+  done
+}
+
 # Map a libmpv_<plat>-<arch>.<ext> filename → arch token.
 arch_from_artifact() {
   case "$1" in
@@ -1532,6 +1565,9 @@ check_binary() {
   else
     fail "$missing_flt/${#REQUIRED_FILTERS[@]} audio filters missing"
   fi
+
+  # ── 6b. FFmpeg muxer and protocols outside the lists above ──
+  layer_ffmpeg_components "$str_text" || fail "6b: layer aborted (exit $?)"
 
   # ── 7. audio-only invariant: no video decoder compiled in ──
   phase audioonly
