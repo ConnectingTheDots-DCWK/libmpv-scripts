@@ -561,7 +561,7 @@ verify_mpv_config() {
   ok "mpv config audit passed ($platform)"
 }
 
-# ── ffmpeg patch application (5 patches, identical on every platform) ───────
+# ── ffmpeg patch application (6 patches, identical on every platform) ───────
 # Usage: apply_ffmpeg_patches <ffmpeg_source_dir>
 # Requires SCRIPT_DIR to be set to the directory containing this file.
 apply_ffmpeg_patches() {
@@ -574,6 +574,14 @@ apply_ffmpeg_patches() {
   # --enable-small saving (≈2.8 MB of code/tables) stays intact. Idempotent;
   # no-op when --enable-small is off. Structural fidelity fix — not user-gated.
   python3 "$LIBMPV_SCRIPTS_ROOT/patches/ffmpeg/patch_ffmpeg_codec_longnames.py" "$ffmpeg_dir"
+
+  # Audio filters refuse values that read or write out of their buffers, and
+  # live commands stop leaking expressions (chorus, aecho, pan, mcompand,
+  # compand, aiir, aeval, anequalizer, adelay, dynaudnorm, adrc). The typed
+  # effects of mpv_audio_kit are checked in Dart, a raw af string is not.
+  # Every anchor checked before writing, MARKER-guarded. Safety fix, not
+  # user-gated.
+  python3 "$LIBMPV_SCRIPTS_ROOT/patches/ffmpeg/patch_ffmpeg_filter_bounds.py" "$ffmpeg_dir"
 
   # libsmb2 patch (toggleable): copies libavformat/libsmb2.c and edits
   # configure, Makefile and protocols.c. Idempotent, and every platform

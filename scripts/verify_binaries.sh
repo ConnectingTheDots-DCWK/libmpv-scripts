@@ -14,7 +14,8 @@
 #       -cache-duration, audio-output-state, embedded-cover-art-data/mime,
 #       pcm-tap-frame, audio-tap-frames, analyzer-taps, waveform-data/-enabled,
 #       loudness-scan-data/-enabled)
-#   4.  FFmpeg patches present (libsmb2 protocol, mov advanced_editlist)
+#   4.  FFmpeg patches present (libsmb2 protocol, mov advanced_editlist,
+#       filter bounds)
 #   5.  Required audio decoder whitelist sample present
 #   6.  Required audio filter whitelist sample present
 #  6b.  FFmpeg components no decoder or filter check covers: the spdif muxer
@@ -1541,6 +1542,15 @@ check_binary() {
       fail "ffmpeg patch MISSING: $desc"
     fi
   done
+  # The filter bounds patch is always applied. Its chorus message marks it
+  # whenever chorus is among the selected filters.
+  if [[ ",$AUDIO_FILTERS," == *",chorus,"* ]]; then
+    if grep -qF "Invalid delay, decay, speed or depth for voice" <<<"$str_text"; then
+      pass "ffmpeg patch present: filter bounds"
+    else
+      fail "ffmpeg patch MISSING: filter bounds (chorus message)"
+    fi
+  fi
 
   # ── 5. audio decoders ──
   phase decoders
