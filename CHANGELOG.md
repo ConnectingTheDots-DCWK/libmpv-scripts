@@ -1,24 +1,24 @@
 ## [0.2.2] - Unreleased
 
 ### Fixed
-- While an `on_load` hook runs for the playlist prefetch, the playing file keeps its demuxer: a `dump-cache` no longer aborts, and duration, metadata, position, track switches and the watch-later commands stay on the playing file. `path`, `filename` and `stream-open-filename` report the entry being loaded (`patch_prefetch_hook.py`).
+- While an `on_load` hook runs for the playlist prefetch, the playing file keeps its demuxer, so `dump-cache` no longer aborts and its tracks and metadata stay. `path` names the entry being loaded (`patch_prefetch_hook.py`).
 - Two players in one process prefetch independently, and the prefetch skips an entry whose per-file options differ from the playing one, so its HTTP headers never reach the next host.
 - `prefetch-state` turns `failed` as soon as the prefetch open fails, and going idle closes the prefetched file and resets the state.
-- The waveform and the loudness scan no longer crash on a file with more than 8 channels or on an MP3 that turns from stereo to mono, and they describe the audio track that plays, not the first one. An external track grows its waveform from playback and reports the loudness `unavailable`.
+- The waveform and the loudness scan no longer crash past 8 channels or on an MP3 that turns mono, and they describe the track that plays. An external track grows its waveform from playback.
 - An `fd://` or `fdclose://` source, what an Android `content://` URI becomes, gets its waveform and loudness scan instead of `failed`.
-- Stopping or leaving a file stops its analysis and its download, turning the loudness scan off stops a pass it ran alone, and a failed worker or allocation ends the scan as `failed` at once.
+- Stopping or leaving a file stops its analysis and download, whichever player of the process started it. Turning the loudness scan off stops a pass it ran alone, and a failed worker ends it as `failed`.
 - The analysis follows the playback axis of a file whose timestamps do not start at zero, and an HTTP file whose duration is estimated past its end is analyzed from the cache instead of being downloaded again.
 - Windows: the audio output closes on mpv's core thread when a core is destroyed, before the device watcher (`patch_hotplug_core_thread.py`).
 - iOS: mpv no longer sets the `MoviePlayback` session mode at each output init, so the app keeps its own mode.
 - `audio-spdif` passthrough works and https plays through an HTTP proxy: FFmpeg keeps its spdif muxer and the httpproxy protocol.
-- FFmpeg audio filters refuse values that read or wrote out of their buffers (chorus, aecho, pan, mcompand, compand, aiir, aeval, adelay), and live dynaudnorm and adrc commands no longer leak (`patch_ffmpeg_filter_bounds.py`).
-- SMB waits through the async API and honours FFmpeg's interrupt, so stop and quit no longer wait about 120 s for a server that stopped answering, and closing after a dropped connection no longer writes into freed memory.
+- FFmpeg audio filters such as chorus, pan and aiir refuse values that read or write out of their buffers, and live dynaudnorm and adrc commands no longer leak (`patch_ffmpeg_filter_bounds.py`).
+- SMB honours FFmpeg's interrupt, so stop and quit no longer wait about 120 s for a silent server, and a close after a dropped connection no longer writes into freed memory.
 - An `smb2://` URL reads the password from the authority only and keeps a `%` that starts no valid escape; a `%00` escape fails the open. With `network-timeout` 0 the SMB connect gets 30 s.
 - The PCM tap starts over when the output changes channel count or rate, and stops copying audio when nobody reads it.
 - A live PCM entry with `loop-file` or an A-B loop on plays once to its end instead of spinning on a failing seek (`patch_pcm_stream.py`).
 - A shorter `chapter-list` after a chapter seek no longer crashes in `chapter-metadata` (`patch_chapter_list_reset.py`).
 - Android: the audiotrack output waits when there is nothing to play instead of spinning on a whole core, and feeds silence with `audio-stream-silence` (`patch_audiotrack.py`).
-- Android: when audioserver dies, audiotrack asks mpv to reopen the output instead of recreating a track that never starts, and a pause keeps the audio the track held instead of skipping 0.1 to 0.3 s at resume. The paused position stands still instead of creeping ahead and going back at resume.
+- Android: after audioserver dies, audiotrack reopens the output instead of a track that never starts. A pause keeps the audio and the position the track held instead of skipping 0.1 to 0.3 s.
 
 ### Changed
 - The embedded CA bundle and the system store load only when TLS verification is on.
@@ -27,7 +27,7 @@
 - Verify fails when the x86_64 DLL crashes or stalls under native Wine, and checks every library for the spdif muxer and the httpproxy, https and tls protocols.
 - The macOS and iOS builds run on the `macos-26` image and log the Xcode, SDK and tool versions.
 - The iOS audio session patch, the libsmb2 FFmpeg patch and `patch_prefetch_state.py` stop the build when an anchor is missing instead of shipping without the change.
-- The patches have native tests: `verify/tests/native/run.sh` builds a debug libmpv with AddressSanitizer and runs the C tests of the fixes, and `network_test.sh` checks the SMB and TLS patches against local servers. CI runs them, and `go vet` and `go test` for the TUI, in jobs that do not hold back the release.
+- The patches have native tests: `verify/tests/native/run.sh` runs the C tests of the fixes on an AddressSanitizer libmpv, and `network_test.sh` checks SMB and TLS against local servers. The release waits for them.
 - The TUI shows the per-slice, feature and code-signing checks of Verify, and its version follows this CHANGELOG. It lists the Android `audiotrack` patch, on by default.
 
 ### Docs

@@ -201,9 +201,11 @@ jobs:
           path: builds/sources-*.txt
           if-no-files-found: ignore
 
+  # The native tests are a need: no release artifact while a fix fails
+  # its test.
   release:
     name: Collect release
-    needs: [linux, android, windows, apple]
+    needs: [linux, android, windows, apple, native]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -317,7 +319,7 @@ jobs:
   # white-box tests of verify/tests/native and the patch script tests of
   # verify/tests/patches (run.sh); then, each on a minimal FFmpeg 8.1.1, the
   # filter bounds check and the SMB and TLS checks against impacket's server
-  # (network_test.sh). Not in the needs of release, as for tui. A failure
+  # (network_test.sh). In the needs of release, unlike tui. A failure
   # uploads the logs as native-test-logs.
   native:
     name: Native tests (ASan)
