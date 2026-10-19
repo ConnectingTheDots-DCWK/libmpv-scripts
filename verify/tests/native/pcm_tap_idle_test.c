@@ -14,6 +14,9 @@
 //   pause  reads at 30 Hz go on through 10 s without writes (a pause):
 //          the first read after it still has the samples from before
 //          (control, green before and after)
+//   quiet  a pause the kit does not poll (it rests while the core is idle):
+//          5 s with no writes and no reads, then a read must still return
+//          the samples from before, and the writes after it go on from them
 //   bench  time of one write (480 stereo float frames) while a listener
 //          reads, and 10 s after it stopped (real clock for the timing,
 //          fake clock for the tap); prints, never fails
@@ -182,6 +185,31 @@ static void mode_pause(void)
           "(%zu frames, %ld before, %ld after)", w.frames, w.count[0], w.count[2]);
 }
 
+static void mode_quiet(void)
+{
+    struct win w;
+    rd(&w);
+    for (int t = 0; t < 1000; t += 10) {
+        step_ms(10);
+        wr(0.25f);
+        if (t % 30 == 0)
+            rd(&w);
+    }
+    step_ms(5000);
+    int r = rd(&w);
+    check(r == 0 && w.frames == 4096 && w.count[0] == 8192,
+          "the first read after a quiet pause returns the samples from "
+          "before (%s, %zu frames, %ld before)", r < 0 ? "unavailable" : "window",
+          w.frames, w.count[0]);
+    step_ms(10);
+    check(wr(0.75f), "the write after the pause reaches the ring");
+    step_ms(10);
+    r = rd(&w);
+    check(r == 0 && w.frames == 4096 && w.count[0] > 0 && w.count[2] == 960,
+          "the next read holds the samples from before and the new chunk "
+          "(%zu frames, %ld before, %ld after)", w.frames, w.count[0], w.count[2]);
+}
+
 static double real_ns(void)
 {
     struct timespec ts;
@@ -228,6 +256,8 @@ int main(int argc, char **argv)
         mode_slow();
     else if (!strcmp(mode, "pause"))
         mode_pause();
+    else if (!strcmp(mode, "quiet"))
+        mode_quiet();
     else if (!strcmp(mode, "bench"))
         mode_bench();
     else {

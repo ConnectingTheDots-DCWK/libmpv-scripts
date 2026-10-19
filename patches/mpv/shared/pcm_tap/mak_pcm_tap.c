@@ -59,11 +59,15 @@ static struct mak_pcm_tap g_tap;
  * (cancel, Player dispose, hot restart) the per-chunk convert and
  * copy stop. The idle span is 4 read periods, at least
  * MAK_PCM_TAP_IDLE_NS, so a slow poll keeps the tap armed. The
- * first read after an idle span re-arms it and empties the ring:
- * what the ring held is from before, maybe from another track. */
+ * first read after an idle span re-arms it, and empties the ring if
+ * the output wrote audio the tap skipped meanwhile: what the ring
+ * held is from before it, maybe from another track. With no audio
+ * written (a pause the reader stopped polling through) the ring still
+ * ends where the output stands, and the read returns it. */
 #define MAK_PCM_TAP_IDLE_NS (INT64_C(2) * 1000000000)
 static atomic_int_least64_t g_tap_read_ns;   /* 0: never read */
 static atomic_int_least64_t g_tap_idle_ns;
+static atomic_bool g_tap_skipped;  /* a write skipped since the last read */
 
 /* Format normalisation: every supported PCM format → interleaved
  * Float32 in `dst`. Returns the number of float samples written
@@ -181,8 +185,10 @@ void mak_pcm_tap_write(struct ao *ao, void **data, int num_samples)
     if (!read_ns)
         return;
     if (mp_time_ns() - read_ns >
-        atomic_load_explicit(&g_tap_idle_ns, memory_order_relaxed))
+        atomic_load_explicit(&g_tap_idle_ns, memory_order_relaxed)) {
+        atomic_store_explicit(&g_tap_skipped, true, memory_order_relaxed);
         return;
+    }
     /* Skip non-PCM (S/PDIF passthrough: AC3, DTS, TrueHD, …):
      * those are opaque codec bytes, not samples we can visualise. */
     if (!af_fmt_is_pcm(ao->format))
@@ -252,6 +258,8 @@ int mak_pcm_tap_read(struct mpv_node *out, int max_samples, void *parent)
                                             memory_order_relaxed);
     int64_t idle = atomic_load_explicit(&g_tap_idle_ns,
                                         memory_order_relaxed);
+    bool skipped = atomic_exchange_explicit(&g_tap_skipped, false,
+                                            memory_order_relaxed);
     bool rearm = !prev || now - prev > idle;
     int64_t next_idle = prev ? 4 * (now - prev) : 0;
     if (next_idle < MAK_PCM_TAP_IDLE_NS)
@@ -260,9 +268,9 @@ int mak_pcm_tap_read(struct mpv_node *out, int max_samples, void *parent)
 
     mp_mutex_lock(&g_tap_lock);
 
-    /* The writes stopped during the idle span: start over, so the
+    /* Audio went by uncopied during the idle span: start over, so the
      * reader never gets a window from before it. */
-    if (rearm) {
+    if (rearm && skipped) {
         g_tap.write_pos   = 0;
         g_tap.valid_bytes = 0;
     }
