@@ -1,4 +1,4 @@
-## [0.2.2] - Unreleased
+## [0.2.2] - 19-10-2026
 
 ### Fixed
 - While an `on_load` hook runs for the playlist prefetch, the playing file keeps its demuxer, so `dump-cache` no longer aborts and its tracks and metadata stay. `path` names the entry being loaded (`patch_prefetch_hook.py`).
@@ -14,7 +14,7 @@
 - FFmpeg audio filters such as chorus, pan and aiir refuse values that read or write out of their buffers, and live dynaudnorm and adrc commands no longer leak (`patch_ffmpeg_filter_bounds.py`).
 - SMB honours FFmpeg's interrupt, so stop and quit no longer wait about 120 s for a silent server, and a close after a dropped connection no longer writes into freed memory.
 - An `smb2://` URL reads the password from the authority only and keeps a `%` that starts no valid escape; a `%00` escape fails the open. With `network-timeout` 0 the SMB connect gets 30 s.
-- The PCM tap starts over when the output changes channel count or rate, and stops copying audio when nobody reads it.
+- The PCM tap starts over when the output changes channel count or rate, and stops copying audio when nobody reads it, keeping the frame of a pause.
 - A live PCM entry with `loop-file` or an A-B loop on plays once to its end instead of spinning on a failing seek (`patch_pcm_stream.py`).
 - A shorter `chapter-list` after a chapter seek no longer crashes in `chapter-metadata` (`patch_chapter_list_reset.py`).
 - Android: the audiotrack output waits when there is nothing to play instead of spinning on a whole core, and feeds silence with `audio-stream-silence` (`patch_audiotrack.py`).
