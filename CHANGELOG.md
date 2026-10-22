@@ -1,3 +1,8 @@
+## [0.2.3] - Unreleased
+
+### Fixed
+- `waveform-data` reports a pass decoded from the cache of an HTTP file as `decoding`, with the bins it reached as `coverage_bins` and `progress`, until it turns `ready`, so a reader tells its partial envelopes from the final one ([mpv_audio_kit#28](https://github.com/ales-drnz/mpv_audio_kit/issues/28), by [@erikjara](https://github.com/erikjara)).
+
 ## [0.2.2] - 19-10-2026
 
 ### Fixed
