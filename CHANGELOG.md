@@ -1,4 +1,4 @@
-## [0.2.3] - Unreleased
+## [0.2.3] - 22-10-2026
 
 ### Fixed
 - The waveform of an HTTP file decoded from the cache reads `decoding`, with the bins it reached as `coverage_bins` and `progress`, until `ready`, instead of `progressive` (mpv_audio_kit [#28](https://github.com/ales-drnz/mpv_audio_kit/issues/28), by [@erikjara](https://github.com/erikjara)). When the pass hands over to the re-open, `progress` starts again from 0.
