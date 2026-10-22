@@ -1,0 +1,70 @@
+// Copyright © 2026 & onwards, Alessandro Di Ronza <ales.drnz@gmail.com>.
+// All rights reserved.
+// Use of this source code is governed by BSD 3-Clause license that can be found in the LICENSE file.
+
+// analysis_feed_test <mode> <fixtures> <tmpdir>: the waveform of an HTTP
+// file decoded from mpv's cache (the cache feed) reads as a decode while the
+// file downloads. b.flac (30 s) comes from slow_http.py at 600000 bytes a
+// second (run.sh), several seconds for the file, with the cache on.
+//   grow   waveform on: every snapshot before the end reads "decoding",
+//          with the bins filled so far as its coverage, never shrinking,
+//          and several of them partial; then "ready" with every bin filled
+//          (r18 reads the partials as "progressive", like an envelope that
+//          grows from playback and never turns ready).
+#include "analysis_test.h"
+
+int main(int argc, char **argv)
+{
+    if (argc < 4) {
+        fprintf(stderr, "usage: %s grow <fixtures> <tmpdir>\n", argv[0]);
+        return 2;
+    }
+    char url[256];
+    snprintf(url, sizeof url, "http://127.0.0.1:%s/b.flac",
+             getenv("HTTP_PORT") ? getenv("HTTP_PORT") : "0");
+    mpv_handle *h = an_create();
+    mpv_initialize(h);
+    an_flag(h, "waveform-enabled", 1);
+    mpv_set_property_string(h, "pause", "yes");
+    mt_cmd(h, "loadfile", url, NULL, NULL);
+    mt_check(an_wait_event(h, MPV_EVENT_FILE_LOADED, 15), "file loaded");
+
+    struct an_wave w = {0};
+    int partials = 0, other = 0, shrank = 0, uncounted = 0;
+    int64_t last = 0;
+    char other_state[32] = "";
+    double t0 = mt_now();
+    while (mt_now() - t0 < 30) {
+        mpv_wait_event(h, 0.05);
+        an_wave_free(&w);
+        an_wave_read(h, &w);
+        if (an_final_wave(w.state))
+            break;
+        if (strcmp(w.state, "decoding")) {
+            if (!other++)
+                snprintf(other_state, sizeof other_state, "%s", w.state);
+            continue;
+        }
+        if (!w.bins)
+            continue;   // the pass has not laid out its axis yet
+        partials += w.coverage > 0 && w.coverage < w.total_bins;
+        shrank += w.coverage < last;
+        uncounted += w.coverage != w.filled;
+        last = w.coverage;
+    }
+    printf("     after %.2f s: %s, %d of %d bins filled; %d partial snapshots, "
+           "%d in another state (%s)\n", mt_now() - t0, w.state, w.filled,
+           w.bins, partials, other, other ? other_state : "none");
+    mt_check(!other, "the pass reads decoding until it ends (%d read %s)",
+             other, other ? other_state : "otherwise");
+    mt_check(partials >= 3, "partial envelopes while the file downloads (%d)",
+             partials);
+    mt_check(!shrank, "the coverage never shrinks (%d)", shrank);
+    mt_check(!uncounted, "the coverage is the bins filled (%d differ)", uncounted);
+    mt_check(!strcmp(w.state, "ready") && w.bins > 0 && w.filled == w.bins,
+             "ready with every bin filled (%s, %d of %d)", w.state, w.filled,
+             w.bins);
+    an_wave_free(&w);
+    mpv_terminate_destroy(h);
+    return mt_result();
+}

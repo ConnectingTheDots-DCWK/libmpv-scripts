@@ -835,6 +835,15 @@ int mak_waveform_read(struct mpv_node *out, void *parent)
     /* Live decode progress for the new property keys (snapshot under the lock). */
     int     snap_coverage   = g_wave.coverage_bins;
     int     snap_total_bins = g_wave.bins;
+    /* A cache-fed pass decodes the whole file and turns READY at its end,
+     * like the bulk decode: it reads as a decode, with the bins it reached
+     * as its coverage (as in mak_waveform_decode_fraction), so a reader
+     * tells its partial envelopes from the final one, and from an envelope
+     * that grows from playback and never ends. */
+    if (g_wave.fed && state == MAK_WAVE_PROGRESSIVE) {
+        state = MAK_WAVE_DECODING;
+        snap_coverage = g_wave.valid_bins;
+    }
 
     /* ROLLING has no total. The axis is derived straight from the bin grid so
      * it is bin-quantized and stable across polls: the surfaced window starts
