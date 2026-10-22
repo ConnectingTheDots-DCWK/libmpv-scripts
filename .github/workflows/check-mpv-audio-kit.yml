@@ -1,0 +1,617 @@
+name: Check mpv_audio_kit
+
+# Pre-release check of mpv_audio_kit on Windows, macOS, iOS and the Android
+# emulators against the libraries of a Build run, before the libmpv release
+# exists. It runs here because this repository's token can read its own run
+# artifacts; mpv_audio_kit is public and checked out without one. The kit
+# pins a libmpv release in its build hook: the hook's libmpv user define
+# points it at the run's assets instead, in the package's pubspec for its
+# own tests and in the app's pubspec for the app builds. The edits stay on
+# the runner.
+#
+# Started by hand with the run, the kit's branch and the tags, or by a push
+# to a ci/ branch whose commit sets LIBS_RUN and KIT_REF below and names the
+# tags in its message. With no tag it runs the tests, the per file Windows
+# run, the app builds and the iOS simulator; '[full check]' adds the Android
+# emulators, and '[android emu]', '[native]', '[cpu diag]', '[underrun diag]',
+# '[ios only]' and '[macos test only]' run just their part.
+on:
+  push:
+    branches: ['ci/**']
+  workflow_dispatch:
+    inputs:
+      libs_run:
+        description: Build run whose libmpv-release artifact is checked
+        required: true
+      kit_ref:
+        description: mpv_audio_kit branch, tag or commit
+        default: main
+      tags:
+        description: Tags as in a commit message, e.g. [full check]
+        default: ''
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  LIBS_RUN: ${{ inputs.libs_run || '39769294284' }}
+  KIT_REPO: ales-drnz/mpv_audio_kit
+  KIT_REF: ${{ inputs.kit_ref || 'main' }}
+  GH_TOKEN: ${{ github.token }}
+  # A missing libmpv or fixture fails the suite instead of skipping it.
+  CI: 'true'
+
+jobs:
+  test:
+    if: ${{ !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[ios only]') && !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[underrun diag]') && !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[cpu diag]') && !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[android emu]') && !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[native]') }}
+    name: Test ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # '[macos test only]' in the commit message runs just this job on macOS.
+        os: ${{ fromJSON(contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[macos test only]') && '["macos-latest"]' || '["windows-latest", "macos-latest"]') }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out mpv_audio_kit
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.KIT_REPO }}
+          ref: ${{ env.KIT_REF }}
+          path: kit
+      - name: Fetch the libraries
+        run: |
+          gh run download "$LIBS_RUN" -R "$GITHUB_REPOSITORY" -n libmpv-release -D bin
+          py=python3; [ "$RUNNER_OS" = Windows ] && py=python
+          "$py" - bin <<'EOF'
+          import hashlib, json, os, sys
+          d = sys.argv[1]
+          assets = json.load(open(os.path.join(d, 'manifest.json')))['assets']
+          for name, sha in sorted(assets.items()):
+              got = hashlib.sha256(open(os.path.join(d, name), 'rb').read()).hexdigest()
+              print(name, 'OK' if got == sha else 'MISMATCH')
+              assert got == sha, name
+          EOF
+      - name: Point the build hook at them
+        run: |
+          printf '\nhooks:\n  user_defines:\n    mpv_audio_kit:\n      libmpv: ../bin\n' >> kit/pubspec.yaml
+          tail -5 kit/pubspec.yaml
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: flutter test
+        working-directory: kit
+        run: |
+          flutter --version
+          flutter pub get
+          flutter test -j 1 -r expanded 2>&1 | tee ../test.log
+      # flutter test on macOS installs the code asset as a bare dylib,
+      # build/native_assets/macos/libmpv_audio_kit, while
+      # test/_helpers/libmpv_resolver.dart looks for
+      # libmpv_audio_kit.framework/libmpv_audio_kit: every runtime suite then
+      # fails with "no bundled libmpv". This second run links the framework
+      # path to the dylib as soon as flutter installs it, so the rest of the
+      # suite runs against the libraries. CI only; the package is unchanged.
+      - name: flutter test with the framework path linked (macOS workaround)
+        if: always() && runner.os == 'macOS'
+        working-directory: kit
+        run: |
+          d=build/native_assets/macos
+          ls -la "$d" || true
+          rm -rf "$d"
+          (
+            until [ -f "$d/libmpv_audio_kit" ]; do sleep 0.1; done
+            sleep 1
+            mkdir -p "$d/libmpv_audio_kit.framework"
+            ln -sf ../libmpv_audio_kit "$d/libmpv_audio_kit.framework/libmpv_audio_kit"
+            echo "linked $(ls -la "$d/libmpv_audio_kit.framework")"
+          ) &
+          flutter test -j 1 -r expanded 2>&1 | tee ../test-shim.log
+      - name: Summary
+        if: always()
+        run: |
+          for l in test test-shim; do
+            [ -f $l.log ] || continue
+            grep -E '\[E\]$' $l.log | sort -u > failures-$l.txt || true
+            echo "== $l: $(tail -1 $l.log)"
+            echo "Failing tests:"; cat failures-$l.txt
+          done
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: test-${{ matrix.os }}
+          path: |
+            test*.log
+            failures-*.txt
+
+  windows-per-file:
+    if: ${{ !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[ios only]') && !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[macos test only]') && !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[underrun diag]') && !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[cpu diag]') && !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[android emu]') && !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[native]') }}
+    name: Windows per file
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.KIT_REPO }}
+          ref: ${{ env.KIT_REF }}
+          path: kit
+      - name: Fetch the libraries and point the build hook at them
+        run: |
+          gh run download "$LIBS_RUN" -R "$GITHUB_REPOSITORY" -n libmpv-release -D bin
+          printf '\nhooks:\n  user_defines:\n    mpv_audio_kit:\n      libmpv: ../bin\n' >> kit/pubspec.yaml
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Every test file on its own
+        working-directory: kit
+        run: |
+          set +e
+          flutter pub get > /dev/null
+          mkdir -p ../logs
+          for f in $(find test -name '*_test.dart' | sort); do
+            log="../logs/$(echo "$f" | tr '/' '_').log"
+            flutter test -r expanded "$f" > "$log" 2>&1
+            rc=$?
+            assert=$(grep -c 'Assertion failed' "$log")
+            last=$(grep -oE '\+[0-9]+( ~[0-9]+)?( -[0-9]+)?: (All tests passed|Some tests failed)' "$log" | tail -1)
+            echo "rc=$rc assert=$assert $f $last" | tee -a ../summary.txt
+          done
+          true
+      - name: The whole suite in one run
+        working-directory: kit
+        run: |
+          set +e
+          flutter test -j 1 -r expanded 2>&1 | tee ../whole.log | tail -3
+          true
+      - name: Summary
+        if: always()
+        run: |
+          tail -1 whole.log
+          echo "Files with an assertion:"; grep -v 'assert=0' summary.txt || true
+          # 79 is "No tests ran": a file whose @TestOn excludes Windows.
+          echo "Files that did not pass:"; grep -vE 'rc=(0|79) ' summary.txt || true
+          ! grep -qvE 'rc=(0|79) ' summary.txt
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-per-file
+          path: |
+            summary.txt
+            whole.log
+            logs/
+
+  build:
+    if: ${{ !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[ios only]') && !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[macos test only]') && !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[underrun diag]') && !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[cpu diag]') && !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[android emu]') && !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[native]') }}
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            command: flutter build windows --debug
+          - name: macOS (SwiftPM)
+            os: macos-latest
+            command: >-
+              flutter build macos --debug &&
+              ../kit/scripts/ci/check_apple_frameworks.sh build/macos/Build/Products/Debug/freshapp.app/Contents/Frameworks
+          - name: macOS (CocoaPods)
+            os: macos-latest
+            swiftpm: 'off'
+            command: >-
+              flutter build macos --debug &&
+              ../kit/scripts/ci/check_apple_frameworks.sh --expect-plugin build/macos/Build/Products/Debug/freshapp.app/Contents/Frameworks
+          - name: iOS (SwiftPM)
+            os: macos-latest
+            command: >-
+              flutter build ios --simulator --debug &&
+              ../kit/scripts/ci/check_apple_frameworks.sh build/ios/iphonesimulator/Runner.app/Frameworks
+          - name: iOS (CocoaPods)
+            os: macos-latest
+            swiftpm: 'off'
+            command: >-
+              flutter build ios --simulator --debug &&
+              ../kit/scripts/ci/check_apple_frameworks.sh --expect-plugin build/ios/iphonesimulator/Runner.app/Frameworks
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.KIT_REPO }}
+          ref: ${{ env.KIT_REF }}
+          path: kit
+      - name: Fetch the libraries
+        run: gh run download "$LIBS_RUN" -R "$GITHUB_REPOSITORY" -n libmpv-release -D bin
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Disable Swift Package Manager
+        if: matrix.swiftpm == 'off'
+        run: flutter config --no-enable-swift-package-manager
+      - name: Create an app from the current template
+        run: |
+          flutter --version
+          flutter create --org com.example --platforms=windows,macos,ios freshapp
+          cd freshapp
+          flutter pub add 'mpv_audio_kit:{"path":"../kit"}'
+          printf '\nhooks:\n  user_defines:\n    mpv_audio_kit:\n      libmpv: ../bin\n' >> pubspec.yaml
+          cat > lib/main.dart <<'EOF'
+          import 'package:flutter/material.dart';
+          import 'package:mpv_audio_kit/mpv_audio_kit.dart';
+
+          void main() {
+            WidgetsFlutterBinding.ensureInitialized();
+            MpvAudioKit.ensureInitialized();
+            final player = Player();
+            runApp(MaterialApp(home: Text('mpv ${player.hashCode}')));
+          }
+          EOF
+          flutter pub get
+      - name: Build
+        working-directory: freshapp
+        run: ${{ matrix.command }}
+      - name: The libmpv in the app is the run's
+        if: matrix.name == 'Windows'
+        working-directory: freshapp
+        run: |
+          f=$(find build/windows -name mpv_audio_kit.dll | head -1)
+          echo "bundled: $f"; test -n "$f"
+          got=$(sha256sum "$f" | cut -d' ' -f1)
+          want=$(python -c "import json;print(json.load(open('../bin/manifest.json'))['assets']['libmpv_windows-x86_64.dll'])")
+          echo "$got / $want"; test "$got" = "$want"
+
+  ios-integration:
+    name: iOS simulator integration tests
+    if: ${{ !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[macos test only]') && !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[underrun diag]') && !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[cpu diag]') && !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[android emu]') && !contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[native]') }}
+    runs-on: macos-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.KIT_REPO }}
+          ref: ${{ env.KIT_REF }}
+          path: kit
+      - name: Fetch the libraries
+        run: gh run download "$LIBS_RUN" -R "$GITHUB_REPOSITORY" -n libmpv-release -D bin
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Disable Swift Package Manager
+        run: flutter config --no-enable-swift-package-manager
+      - name: App from the current template with the test app's integration tests
+        run: |
+          flutter --version
+          flutter create --org com.example --platforms=ios freshapp
+          cd freshapp
+          flutter pub add 'mpv_audio_kit:{"path":"../kit"}' path_provider
+          flutter pub add 'dev:integration_test:{"sdk":"flutter"}'
+          cp -R ../kit/test_app/integration_test ../kit/test_app/assets .
+          # The android_ files run on the emulators. One imports test_app's
+          # own library, which this app does not have, so it cannot build.
+          rm integration_test/android_*_test.dart
+          python3 - <<'PY2'
+          p = 'pubspec.yaml'
+          s = open(p).read()
+          s = s.replace('  uses-material-design: true', '  uses-material-design: true\n  assets:\n    - assets/fixtures/\n    - assets/fixtures/codec/', 1)
+          s += '\nhooks:\n  user_defines:\n    mpv_audio_kit:\n      libmpv: ../bin\n'
+          open(p, 'w').write(s)
+          PY2
+          flutter pub get
+      - name: Boot a simulator
+        run: |
+          udid=$(xcrun simctl list devices available -j | python3 -c "import json,sys;d=json.load(sys.stdin)['devices'];print(next(x['udid'] for k,v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone')))")
+          echo "UDID=$udid" >> "$GITHUB_ENV"
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          xcrun simctl list devices booted
+      # Each file gets 10 minutes and its full verbose output in logs/. The
+      # simulator sometimes launches the app and flutter test never attaches
+      # (seen with several libmpv builds and an unchanged app): a timeout
+      # before any test started is retried, twice at most. A test that
+      # fails, or a timeout once tests are running, fails the job.
+      - name: flutter test integration_test, one file at a time
+        working-directory: freshapp
+        timeout-minutes: 130
+        run: |
+          mkdir -p ../logs
+          failed=()
+          for f in $(ls integration_test/*_test.dart | sort); do
+            name=$(basename "$f" .dart)
+            result=fail
+            for attempt in 1 2 3; do
+              log="../logs/$name.$attempt.log"
+              echo "=== $f attempt $attempt $(date -u +%T)"
+              set +e
+              perl -e 'alarm shift; exec @ARGV' 600 flutter test "$f" -d "$UDID" -r expanded -v > "$log" 2>&1
+              rc=$?
+              set -e
+              grep -E '[0-9]+:[0-9]+ \+|All tests passed|Some tests failed|No tests ran' "$log" | tail -40 || true
+              if [ $rc -eq 0 ]; then result=pass; break; fi
+              # 79 is flutter's "no tests found": a file whose tests all
+              # return early off Android, like android_audiotrack_test.
+              if [ $rc -eq 79 ] && grep -q 'No tests ran' "$log"; then
+                echo "::notice::$f has no tests on iOS"; result=skip; break
+              fi
+              xcrun simctl terminate "$UDID" com.example.freshapp >/dev/null 2>&1 || true
+              xcrun simctl uninstall "$UDID" com.example.freshapp >/dev/null 2>&1 || true
+              if [ $rc -eq 142 ]; then
+                xcrun simctl spawn "$UDID" log show --last 12m --style compact --predicate 'process == "Runner"' > "../logs/$name.$attempt.sim.log" 2>&1 || true
+                if grep -qE '[0-9]+:[0-9]+ \+[0-9]+.*: \(setUpAll\)' "$log"; then
+                  echo "::error::$f timed out with tests running"; break
+                fi
+                echo "::warning::$f timed out before any test started (attempt $attempt)"
+                result=launch-timeout
+                continue
+              fi
+              echo "::error::$f failed (exit $rc)"; tail -60 "$log"; break
+            done
+            echo "--- $f: $result" | tee -a ../logs/summary.txt
+            [ "$result" = pass ] || [ "$result" = skip ] || failed+=("$f")
+          done
+          if [ ${#failed[@]} -gt 0 ]; then printf 'FAILED: %s\n' "${failed[@]}"; exit 1; fi
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ios-integration-${{ env.LIBS_RUN }}
+          path: logs
+
+  # '[underrun diag]' runs only this job: the null
+  # audio output on this host, with a plain file as the control, live PCM
+  # prefilled, at real time and with jitter, and the Dart process stalls.
+  underrun-diag:
+    if: ${{ contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[underrun diag]') }}
+    name: Underrun diagnostic macOS
+    runs-on: macos-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out mpv_audio_kit
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.KIT_REPO }}
+          ref: ${{ env.KIT_REF }}
+          path: kit
+      - name: Check out this repository for the diagnostic
+        uses: actions/checkout@v7
+        with:
+          path: scripts
+      - name: Fetch the libraries
+        run: gh run download "$LIBS_RUN" -R "$GITHUB_REPOSITORY" -n libmpv-release -D bin
+      - name: Point the build hook at them
+        run: |
+          printf '\nhooks:\n  user_defines:\n    mpv_audio_kit:\n      libmpv: ../bin\n' >> kit/pubspec.yaml
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Diagnostic
+        working-directory: kit
+        env:
+          DIAG_ROUNDS: '12'
+        run: |
+          cp ../scripts/.github/diag/zz_underrun_diag_test.dart test/runtime_extended/
+          sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize || true
+          flutter pub get
+          d=build/native_assets/macos
+          rm -rf "$d"
+          ( until [ -f "$d/libmpv_audio_kit" ]; do sleep 0.1; done; sleep 1
+            mkdir -p "$d/libmpv_audio_kit.framework"
+            ln -sf ../libmpv_audio_kit "$d/libmpv_audio_kit.framework/libmpv_audio_kit" ) &
+          flutter test -r expanded test/runtime_extended/zz_underrun_diag_test.dart 2>&1 | tee ../diag.log
+          grep 'DIAG SUMMARY' ../diag.log
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: underrun-diag
+          path: diag.log
+
+  # '[cpu diag]' runs only this job: CPU per thread of a profile build on
+  # Linux in a few player states, with a pulse null sink as the audio output and perf on the paused
+  # phases. KIT_REF with the published libmpv: no run artifacts needed.
+  # Patches in .github/diag/cpu/*.patch are applied to the kit first, so the
+  # same job measures a fix before it lands.
+  cpu-diag:
+    if: ${{ contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[cpu diag]') }}
+    name: CPU diagnostic Linux (profile)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out mpv_audio_kit
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.KIT_REPO }}
+          ref: ${{ env.KIT_REF }}
+          path: kit
+      - name: Check out this repository for the diagnostic
+        uses: actions/checkout@v7
+        with:
+          path: scripts
+      - name: Packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build libgtk-3-dev xvfb pulseaudio pulseaudio-utils
+          sudo apt-get install -y -qq linux-tools-common "linux-tools-$(uname -r)" || echo "perf not available"
+          sudo sysctl -w kernel.perf_event_paranoid=-1 || true
+          nproc; lscpu | grep 'Model name' || true
+      - name: Null audio sink
+        run: |
+          pulseaudio -D --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=null
+          pactl set-default-sink null
+          pactl info | grep 'Default Sink'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Patches under test
+        working-directory: kit
+        run: |
+          shopt -s nullglob
+          for p in ../scripts/.github/diag/cpu/*.patch; do echo "applying $p"; git apply "$p"; done
+          git diff --stat
+      - name: Diagnostic
+        working-directory: kit/test_app
+        run: |
+          cp ../../scripts/.github/diag/zz_cpu_idle_diag_test.dart integration_test/
+          flutter pub get
+          perf_phase() {
+            local phase=$1
+            until [ "$(cat /tmp/cpu_diag_phase 2>/dev/null)" = "$phase" ]; do sleep 0.2; done
+            sleep 4
+            local pid
+            pid=$(pgrep -n mpv_audio_kit_t) || return 0
+            command -v perf >/dev/null || return 0
+            sudo perf record -F 499 -g -p "$pid" -o "../../perf_$phase.data" -- sleep 20 > /dev/null 2>&1
+            sudo perf report -i "../../perf_$phase.data" --stdio --no-children --sort comm,dso,sym 2>/dev/null | head -200 > "../../perf_$phase.txt"
+            sudo perf report -i "../../perf_$phase.data" --stdio --no-children --sort comm,dso 2>/dev/null | head -60 > "../../perf_${phase}_dso.txt"
+          }
+          ( perf_phase paused; perf_phase paused_fft ) &
+          xvfb-run -a flutter drive --profile -d linux \
+            --driver=test_driver/integration_test.dart \
+            --target=integration_test/zz_cpu_idle_diag_test.dart 2>&1 | tee ../../cpu.log
+          wait || true
+          cp build/integration_response_data.json ../../cpu.json || true
+      - name: Diagnostic with the native get stubbed
+        working-directory: kit
+        run: |
+          sed -i "s|final (rc, value) = await _asyncGet(|final (rc, value) = const bool.fromEnvironment('MAK_DIAG_STUB_GET') ? (0, const <String, Object>{'sample_rate': 48000, 'channels': 2, 'pts_ns': 1}) : await _asyncGet(|" lib/src/dsp/spectrum_pipeline.dart
+          grep -c MAK_DIAG_STUB_GET lib/src/dsp/spectrum_pipeline.dart
+          cd test_app
+          xvfb-run -a flutter drive --profile -d linux \
+            --dart-define=MAK_DIAG_STUB_GET=true \
+            --dart-define=MAK_DIAG_PHASES=paused,paused_fft \
+            --driver=test_driver/integration_test.dart \
+            --target=integration_test/zz_cpu_idle_diag_test.dart 2>&1 | tee ../../cpu_stub.log
+      - name: Summary
+        if: always()
+        run: |
+          grep -h '\[cpu_diag\]' cpu.log cpu_stub.log 2>/dev/null | sed 's/^.*\[cpu_diag\]/[cpu_diag]/' >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: cpu-diag
+          path: |
+            cpu.log
+            cpu_stub.log
+            cpu.json
+            perf_*.txt
+
+  # '[android emu]' runs only this job, '[full check]' adds it to the rest:
+  # test_app's Android integration tests on emulators (API 24, 29 and 34,
+  # google_apis, x86_64) against the Android libraries of LIBS_RUN. It
+  # carries the audiotrack checks (F277 thread at rest during a pause or an
+  # underrun, F276 no audio lost at pause, F278 output reopened after
+  # audioserver dies), which no runner without an emulator can see, and the
+  # players of an isolate or an engine that goes away (F170).
+  android-emu:
+    if: ${{ contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[android emu]') || contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[full check]') }}
+    name: Android emulator API ${{ matrix.api }}
+    runs-on: ubuntu-24.04
+    # Five files of at most two 8 minute tries each, plus the boot.
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [24, 29, 34]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out mpv_audio_kit
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.KIT_REPO }}
+          ref: ${{ env.KIT_REF }}
+          path: kit
+      - name: Check out this repository for the scripts
+        uses: actions/checkout@v7
+        with:
+          path: scripts
+      - name: KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Fetch the libraries
+        run: gh run download "$LIBS_RUN" -R "$GITHUB_REPOSITORY" -n libmpv-release -D bin
+      - name: Point the build hook of test_app at them
+        run: |
+          printf '\nhooks:\n  user_defines:\n    mpv_audio_kit:\n      libmpv: ../../bin\n' >> kit/test_app/pubspec.yaml
+          ls bin
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Build the test app once
+        working-directory: kit/test_app
+        run: |
+          flutter pub get
+          flutter build apk --debug
+      - name: Integration tests on the emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: false
+          # No -noaudio: the audiotrack checks need the emulated audio device,
+          # which consumes frames at real time even with no host sound card.
+          emulator-options: -no-window -gpu swiftshader_indirect -no-boot-anim -camera-back none
+          disable-animations: true
+          script: bash ../../scripts/.github/diag/android_emulator.sh ${{ matrix.api }}
+          working-directory: kit/test_app
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: android-emu-${{ matrix.api }}
+          path: kit/test_app/emu-logs
+
+  # '[native]' runs only this job: the C tests of the
+  # mpv patches with AddressSanitizer, as the Build workflow's native job
+  # does, without building the release binaries again.
+  native-check:
+    if: ${{ contains(format('{0} {1}', github.event.head_commit.message, inputs.tags), '[native]') }}
+    name: Native tests (ASan)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      # mpv includes the libplacebo headers (video/csputils.h) even with
+      # libplacebo optional: the release builds have them from source.
+      - name: Install meson, ninja, FFmpeg and libplacebo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends meson ninja-build cmake pkg-config ffmpeg \
+            libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev libswresample-dev \
+            libswscale-dev libplacebo-dev zlib1g-dev
+      - name: Fewer mmap random bits for ASan
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+      - name: mpv patches
+        run: JOBS=4 bash verify/tests/native/run.sh builds/native-tests
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-check-logs
+          path: |
+            builds/native-tests/logs/
+            builds/native-tests/runs/*.log
+          if-no-files-found: ignore
