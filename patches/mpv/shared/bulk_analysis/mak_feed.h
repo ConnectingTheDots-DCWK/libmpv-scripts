@@ -7,8 +7,8 @@
  * as mpv downloads it, decoded on a thread of its own and folded into the
  * waveform at the pace of mpv's download.
  *
- * The waveform is PROGRESSIVE while it fills, with the af-tap fold off for
- * the generation, and turns READY when one pass ran from the start of the
+ * The waveform is PROGRESSIVE while it fills (waveform-data reads it as
+ * "decoding"), with the af-tap fold off for the generation, and turns READY when one pass ran from the start of the
  * file to its end without a gap; the loudness scan (when its patch is in)
  * rides the same decode. When the pass cannot be clean (playback started
  * past the start, a seek the cache cannot serve, a track switch, a cut

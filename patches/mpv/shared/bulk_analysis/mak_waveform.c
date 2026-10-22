@@ -1005,9 +1005,10 @@ int mak_waveform_read(struct mpv_node *out, void *parent)
     list->values[6] = (struct mpv_node){
         .format = MPV_FORMAT_INT64, .u.int64 = range_end_us};
 
-    /* Live BULK decode progress. coverage_bins / total_bins is the sealed-bin
-     * fraction (4 worker regions fill in parallel); progress mirrors it as a
-     * convenience double (1.0 at ready). All 0 / 1.0 outside DECODING. */
+    /* Live decode progress. coverage_bins / total_bins is the sealed-bin
+     * fraction of a BULK decode (4 worker regions fill in parallel), or the
+     * bins a cache-fed pass reached; progress mirrors it as a convenience
+     * double (1.0 at ready). All 0 / 1.0 outside DECODING. */
     list->keys[7] = talloc_strdup(list, "coverage_bins");
     list->values[7] = (struct mpv_node){
         .format = MPV_FORMAT_INT64, .u.int64 = snap_coverage};

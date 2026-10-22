@@ -4,11 +4,12 @@
 
 // analysis_feed_test <mode> <fixtures> <tmpdir>: the waveform of an HTTP
 // file decoded from mpv's cache (the cache feed) reads as a decode while the
-// file downloads. b.flac (30 s) comes from slow_http.py at 600000 bytes a
-// second (run.sh), several seconds for the file, with the cache on.
+// file downloads. b.flac (30 s, 3.7 MB) comes from slow_http.py at 600000
+// bytes a second (run.sh), about 6 s for the file, with the cache on.
 //   grow   waveform on: every snapshot before the end reads "decoding",
 //          with the bins filled so far as its coverage, never shrinking,
-//          and several of them partial; then "ready" with every bin filled
+//          and several of them partial; then "ready" with every bin filled,
+//          and no GET after the player's own, so the pass was the feed's
 //          (r18 reads the partials as "progressive", like an envelope that
 //          grows from playback and never turns ready).
 #include "analysis_test.h"
@@ -64,6 +65,20 @@ int main(int argc, char **argv)
     mt_check(!strcmp(w.state, "ready") && w.bins > 0 && w.filled == w.bins,
              "ready with every bin filled (%s, %d of %d)", w.state, w.filled,
              w.bins);
+
+    // The server's log: one line per GET. The flac demuxer reads the file
+    // once from the start; a re-open would read it from the start again.
+    char path[1100], line[256];
+    snprintf(path, sizeof path, "%s.http.log", argv[3]);
+    FILE *f = fopen(path, "r");
+    int from0 = 0;
+    while (f && fgets(line, sizeof line, f)) {
+        printf("     server: %s", line);
+        from0 += strstr(line, "range=0-") != NULL;
+    }
+    if (f)
+        fclose(f);
+    mt_check(from0 == 1, "no second download (%d GETs from the start)", from0);
     an_wave_free(&w);
     mpv_terminate_destroy(h);
     return mt_result();

@@ -101,8 +101,9 @@ has to care which path produced the envelope:
     demuxer (`demux/mak_demux_feed.h`, a side consumer like `dump-cache`):
     the cached audio packets are replayed, then every new one is queued as
     mpv downloads it, and a thread of its own decodes them into the same
-    bins (state `progressive` while it fills, af-tap fold off, `ready`
-    after the pass reaches the end). The file is downloaded once. When one
+    bins (read as `decoding` while it fills, with the bins it reached as
+    `coverage_bins`; af-tap fold off; `ready` after the pass reaches the
+    end). The file is downloaded once. When one
     clean pass is not possible (playback starting further in, any seek the
     cache cannot serve, an audio track switch, a cut download, the cache off
     or on disk, a file larger than the forward cache, a read-ahead that

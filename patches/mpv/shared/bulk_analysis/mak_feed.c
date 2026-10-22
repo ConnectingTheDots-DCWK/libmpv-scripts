@@ -393,7 +393,7 @@ static MP_THREAD_VOID feed_main(void *p)
                         &a->track);
     /* The demuxer went away before the end (stop, next file): nothing will
      * finish this generation, so close it instead of leaving a partial
-     * envelope on "progressive" and the loudness on "scanning". */
+     * envelope on "decoding" and the loudness on "scanning". */
     if (closed && !complete && mak_waveform_fed_abandon(a->gen))
         goto fail;
     goto done;
