@@ -65,6 +65,20 @@ export LIBSMB2_VERSION="${LIBSMB2_VERSION:-6.0.0}"
 # keeps mpv on the code paths every later PipeWire supports.
 export PIPEWIRE_VERSION="${PIPEWIRE_VERSION:-0.3.57}"
 
+# ── Licence ──────────────────────────────────────────────────────────────────
+# LIBMPV_LICENSE says what the built library is licensed under. `gpl`, the
+# default, is the build this repository has always made: FFmpeg with
+# --enable-gpl --enable-version3, mpv with -Dgpl=true, and Rubber Band (GPL)
+# linked in statically, which makes the whole library GPL-3.0-or-later.
+# `lgpl` leaves out the one component that forces that — Rubber Band, behind
+# the `rubberband` filter — and the GPL switches with it, and drops OpenSSL
+# too: FFmpeg links OpenSSL 3 only under --enable-version3, which would make
+# FFmpeg LGPL-3.0. So an `lgpl` build is LGPL-2.1-or-later throughout and has
+# no TLS: no https or tls protocol, and no embedded CA bundle. Pitch-preserving
+# speed changes still work through mpv's own scaletempo2.
+export LIBMPV_LICENSE="${LIBMPV_LICENSE:-gpl}"
+lgpl_build() { [[ "$LIBMPV_LICENSE" == "lgpl" ]]; }
+
 # ── TLS backend (every platform) ─────────────────────────────────────────────
 # OpenSSL is the unified TLS backend across all five platforms. On Apple
 # we deliberately do NOT use SecureTransport: it's been deprecated by

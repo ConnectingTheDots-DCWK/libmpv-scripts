@@ -390,7 +390,8 @@ if [[ ! -f "$DIST/lib/libspeexdsp.a" ]]; then
 fi
 
 # ── rubberband ────────────────────────────────────────────────────────────────
-if [[ ! -f "$DIST/lib/librubberband.a" ]]; then
+# GPL; not in an lgpl build (LIBMPV_LICENSE, _versions.sh).
+if ! lgpl_build && [[ ! -f "$DIST/lib/librubberband.a" ]]; then
   log "Building rubberband $RUBBERBAND_VERSION..."
   RB=$(fetch rubberband "https://breakfastquay.com/files/releases/rubberband-${RUBBERBAND_VERSION}.tar.bz2")
   tar -xf "$RB" -C "$SRC"
@@ -679,10 +680,12 @@ pushd "$SRC/mpv-$MPV_VERSION"
   if ! libass_stripped; then
     _font_libs="-lass -lfontconfig -lharfbuzz -lfribidi -lfreetype -lpng16 -lexpat "
   fi
+  _gpl_libs="-lrubberband "; _tls_libs="-lssl -lcrypto "
+  lgpl_build && { _gpl_libs=""; _tls_libs=""; }
   WIN_USR_LIBS="-Wl,--start-group \
-    ${_font_libs}-lplacebo -lrubberband -lsmb2 -lxml2 -lspeexdsp \
+    ${_font_libs}-lplacebo ${_gpl_libs}-lsmb2 -lxml2 -lspeexdsp \
     -lz -lbz2 -llzma -liconv \
-    -lssl -lcrypto \
+    ${_tls_libs}\
     -Wl,--end-group"
   # -luxtheme: w32_common.c calls SetWindowTheme. GNU ld GCs the dead win32-VO
   # path in the audio-only build before it needs the import; lld keeps the

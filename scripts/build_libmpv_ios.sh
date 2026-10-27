@@ -627,6 +627,7 @@ slice_speexdsp() {
 
 slice_rubberband() {
   local sdk="$1" arch="$2" prefix="$3" cf="$4"
+  lgpl_build && return  # GPL; not in an lgpl build (LIBMPV_LICENSE)
   [[ -f "$prefix/lib/librubberband.a" ]] && return
   log "rubberband ($sdk/$arch)..."
   local src="$BUILD_DIR/src/rubberband-$RUBBERBAND_VERSION.tar.bz2"

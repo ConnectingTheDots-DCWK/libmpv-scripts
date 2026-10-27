@@ -198,6 +198,11 @@ FFMPEG_COMPONENT_MARKERS=(
   "http,https,tls,rtp,tcp,udp,crypto,httpproxy$|https protocol"
   "Verify against a specific hostname|tls protocol"
 )
+# An lgpl build has no TLS (LIBMPV_LICENSE, _versions.sh): keep the markers
+# that do not need it.
+if lgpl_build; then
+  FFMPEG_COMPONENT_MARKERS=("${FFMPEG_COMPONENT_MARKERS[@]:0:2}")
+fi
 
 mapfile -t REQUIRED_DECODERS < <(echo "$AUDIO_DECODERS" | tr ',' '\n' | head -8)
 mapfile -t REQUIRED_FILTERS  < <(echo "$AUDIO_FILTERS"  | tr ',' '\n')
@@ -1153,11 +1158,23 @@ layer_feature_presence() {
 
   # ── Always-on audio-path features — must be present on every platform ──
   local e mk lbl
-  for e in "https:HTTPS/TLS protocol" "rubberband:rubberband (pitch/tempo)" "dash:DASH demuxer" "OpenSSL:OpenSSL TLS backend"; do
+  local features=("https:HTTPS/TLS protocol" "rubberband:rubberband (pitch/tempo)" "dash:DASH demuxer" "OpenSSL:OpenSSL TLS backend")
+  lgpl_build && features=("dash:DASH demuxer")
+  for e in "${features[@]}"; do
     mk="${e%%:*}"; lbl="${e#*:}"
     if grep -qiF "$mk" <<<"$str"; then pass "feature present: $lbl"
     else fail "feature MISSING: $lbl (marker '$mk')"; fi
   done
+  # The licence, from mpv's own configuration string, which survives the strip
+  # (FFmpeg's avutil_license() does not): an lgpl build was configured
+  # -Dgpl=false. The source-level proof is the config audit in
+  # _audio_only.sh, which asserts CONFIG_GPL, CONFIG_VERSION3 and
+  # CONFIG_LIBRUBBERBAND are 0; this checks the binary is that build.
+  if lgpl_build; then
+    if grep -qF -- "-Dgpl=false" <<<"$str" && ! grep -qF -- "-Dgpl=true" <<<"$str"; then
+      pass "licence: mpv configured -Dgpl=false"
+    else fail "licence: this binary was not configured -Dgpl=false"; fi
+  fi
   # SMB2/NAS — adaptive on the libsmb2 patch (same selection that gates the
   # protocol in ffmpeg_common_args).
   n=$(grep -ciE 'smb2' <<<"$str" || true)
@@ -1622,6 +1639,8 @@ check_binary() {
   for pkg in ffmpeg libplacebo libass harfbuzz freetype fribidi fontconfig \
              libpng zlib libxml2 xz rubberband libsmb2 openssl; do
     local expected actual
+    # Not built into an lgpl build (LIBMPV_LICENSE, _versions.sh).
+    if lgpl_build && [[ "$pkg" == rubberband || "$pkg" == openssl ]]; then continue; fi
     expected="$(expected_version_for "$pkg" "$platform")"
     actual="$(detect_version_in_binary "$pkg" "$str_text")"
     if [[ -z "$expected" ]]; then continue; fi

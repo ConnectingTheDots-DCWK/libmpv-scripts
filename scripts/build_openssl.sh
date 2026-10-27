@@ -47,6 +47,8 @@ source "$SCRIPT_DIR/shared/_versions.sh"
 #   Android arm64     android-arm64
 #   Android x86_64    android-x86_64
 build_openssl() {
+    # An lgpl build has no TLS backend (LIBMPV_LICENSE, _versions.sh).
+    if lgpl_build; then return 0; fi
     local prefix="$1" b="$2" openssl_target="${3:-}" extra_config="${4:-}"
     # The key names what the cached build was configured with: a build
     # kept from before a Configure change (no-atexit) is rebuilt, not reused.

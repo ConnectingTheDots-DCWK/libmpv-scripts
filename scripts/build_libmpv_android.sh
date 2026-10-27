@@ -675,6 +675,7 @@ android_speexdsp() {
 
 android_rubberband() {
   local abi="$1" prefix="$2"
+  lgpl_build && return  # GPL; not in an lgpl build (LIBMPV_LICENSE)
   if [[ ! -f "$prefix/lib/librubberband.a" ]]; then
     local src="$BUILD_DIR/src/rubberband-$RUBBERBAND_VERSION.tar.bz2"
     download "https://breakfastquay.com/files/releases/rubberband-${RUBBERBAND_VERSION}.tar.bz2" "$src"

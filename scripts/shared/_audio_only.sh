@@ -137,7 +137,9 @@ AUDIO_FILTERS+=",equalizer,anequalizer,superequalizer,firequalizer,bass,treble,h
 # ── Spatial / Stereo ────────────────────────────────────────────────────────
 AUDIO_FILTERS+=",stereotools,stereowiden,extrastereo,crossfeed,haas,surround,earwax,pan,channelmap,virtualbass,dialoguenhance,adecorrelate"
 # ── Time / Pitch ────────────────────────────────────────────────────────────
-AUDIO_FILTERS+=",atempo,asetrate,rubberband,aresample,aformat,adelay,apad,compensationdelay,afade,aphaseshift,afreqshift"
+AUDIO_FILTERS+=",atempo,asetrate,aresample,aformat,adelay,apad,compensationdelay,afade,aphaseshift,afreqshift"
+# Rubber Band is GPL, so only a gpl build has its filter (LIBMPV_LICENSE).
+lgpl_build || AUDIO_FILTERS+=",rubberband"
 # ── Modulation / FX ─────────────────────────────────────────────────────────
 AUDIO_FILTERS+=",aecho,chorus,flanger,aphaser,apulsator,tremolo,vibrato"
 # ── Restoration / Noise ─────────────────────────────────────────────────────
@@ -180,6 +182,9 @@ unset _ao_overrides
 # DISABLED_PATCHES override the Settings ▸ Patches tab writes. Used by the
 # apply_*_patches functions below to skip user-disabled feature patches.
 patch_on() {
+  # The CA bundle is compiled into the OpenSSL TLS backend, which an lgpl
+  # build does not have (see LIBMPV_LICENSE in _versions.sh).
+  if lgpl_build && [[ "$1" == "embed_cacert" ]]; then return 1; fi
   case " ${DISABLED_PATCHES:-} " in
     *" $1 "*) return 1 ;;
     *) return 0 ;;
@@ -261,6 +266,17 @@ ffmpeg_common_args() {
   # video/render path back — ffmpeg must BUILD swscale so mpv's required
   # `dependency('libswscale')` resolves via pkg-config. swscale_stripped()
   # couples this to strip_mpv_dead (see its definition above).
+  # What the build is licensed under (LIBMPV_LICENSE, _versions.sh): a gpl
+  # build turns on the GPL and version-3 code, Rubber Band and OpenSSL; an
+  # lgpl build none of them, and so no https or tls protocol either.
+  local _license_flags _tls_protos
+  if lgpl_build; then
+    _license_flags="--disable-openssl"
+    _tls_protos=""
+  else
+    _license_flags=$'--enable-gpl\n--enable-version3\n--enable-librubberband\n--enable-openssl'
+    _tls_protos="https,tls,"
+  fi
   local _swscale_flag="--enable-swscale"
   swscale_stripped && _swscale_flag="--disable-swscale"
   cat <<EOF
@@ -278,7 +294,7 @@ ${_small_flag}
 ${_swscale_flag}
 --disable-avdevice
 --disable-protocols
---enable-protocol=file,http,https,httpproxy,tcp,udp,tls,data,pipe,async,cache,crypto,subfile${_smb2_proto}
+--enable-protocol=file,http,${_tls_protos}httpproxy,tcp,udp,data,pipe,async,cache,crypto,subfile${_smb2_proto}
 --enable-demuxers
 --disable-decoders
 --enable-decoder=$AUDIO_DECODERS
@@ -298,12 +314,9 @@ ${_swscale_flag}
 --enable-lzma
 --disable-iconv
 --enable-network
---enable-gpl
---enable-version3
+${_license_flags}
 --enable-libxml2
 ${_smb2_flag}
---enable-librubberband
---enable-openssl
 --disable-mbedtls
 --disable-sdl2
 --disable-xlib
@@ -324,18 +337,20 @@ EOF
 # off; the optional-deps patch makes libplacebo / libass not-required so
 # unbuilt deps don't fail configure.
 mpv_common_args() {
-  cat <<'EOF'
+  local _gpl=true _rubberband=enabled
+  lgpl_build && { _gpl=false; _rubberband=disabled; }
+  cat <<EOF
 -Db_lto=true
 -Doptimization=s
 -Dauto_features=disabled
--Dgpl=true
+-Dgpl=${_gpl}
 -Dlibmpv=true
 -Dcplayer=false
 -Dbuild-date=false
 -Dtests=false
 -Dgl=disabled
 -Dplain-gl=disabled
--Drubberband=enabled
+-Drubberband=${_rubberband}
 -Dzlib=enabled
 EOF
 }
@@ -404,7 +419,16 @@ verify_ffmpeg_config() {
   # SecureTransport on Apple — Apple deprecated it (no TLS 1.3, on its
   # way out of upstream curl/ffmpeg). Assert it is OFF too, to catch a
   # future regression that would silently re-enable both backends.
-  assert_define "$cfg" "CONFIG_OPENSSL"         "1"
+  if lgpl_build; then
+    # The point of an lgpl build, checked rather than trusted: nothing GPL or
+    # version-3 compiled in, and no OpenSSL.
+    assert_define "$cfg" "CONFIG_GPL"            "0"
+    assert_define "$cfg" "CONFIG_VERSION3"       "0"
+    assert_define "$cfg" "CONFIG_LIBRUBBERBAND"  "0"
+    assert_define "$cfg" "CONFIG_OPENSSL"        "0"
+  else
+    assert_define "$cfg" "CONFIG_OPENSSL"         "1"
+  fi
   case "$platform" in
     macos|ios) assert_define "$cfg" "CONFIG_SECURETRANSPORT" "0" ;;
   esac
@@ -415,8 +439,9 @@ verify_ffmpeg_config() {
   # An https source opens https over tls, and through http-proxy (or the
   # http_proxy variable) tls opens an httpproxy:// URL: without httpproxy
   # every https source fails with "Protocol not found" behind a proxy.
-  assert_define "$cmp" "CONFIG_HTTPS_PROTOCOL"     "1"
-  assert_define "$cmp" "CONFIG_TLS_PROTOCOL"       "1"
+  local _tls=1; lgpl_build && _tls=0
+  assert_define "$cmp" "CONFIG_HTTPS_PROTOCOL"     "$_tls"
+  assert_define "$cmp" "CONFIG_TLS_PROTOCOL"       "$_tls"
   assert_define "$cmp" "CONFIG_HTTPPROXY_PROTOCOL" "1"
 
   # Full 1:1 audit: EVERY selected decoder and filter must have actually
@@ -529,7 +554,12 @@ verify_mpv_config() {
   else
     assert_define "$cfg" "HAVE_LIBASS" "1"
   fi
-  assert_define "$cfg" "HAVE_RUBBERBAND" "1"
+  if lgpl_build; then
+    assert_define "$cfg" "HAVE_RUBBERBAND" "0"
+    assert_define "$cfg" "HAVE_GPL" "0"
+  else
+    assert_define "$cfg" "HAVE_RUBBERBAND" "1"
+  fi
   assert_define "$cfg" "HAVE_ZLIB"       "1"
 
   # ── Audio outputs per platform ────────────────────────────────────────

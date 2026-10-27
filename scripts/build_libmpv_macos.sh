@@ -529,6 +529,7 @@ build_speexdsp() {
 
 build_rubberband() {
   local prefix="$1"
+  lgpl_build && return  # GPL; not in an lgpl build (LIBMPV_LICENSE)
   [[ -f "$prefix/lib/librubberband.a" ]] && { ok "rubberband already compiled"; return; }
   log "Build rubberband $RUBBERBAND_VERSION..."
   local src="$BUILD_DIR/src/rubberband-$RUBBERBAND_VERSION.tar.bz2"

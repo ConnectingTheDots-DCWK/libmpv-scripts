@@ -370,6 +370,7 @@ build_libunibreak() {
 }
 
 build_rubberband() {
+  lgpl_build && return  # GPL; not in an lgpl build (LIBMPV_LICENSE)
   [[ -f "$PREFIX/lib/librubberband.a" ]] && return
   local src="$BUILD_DIR/src/rubberband-$RUBBERBAND_VERSION.tar.bz2"
   download "https://breakfastquay.com/files/releases/rubberband-${RUBBERBAND_VERSION}.tar.bz2" "$src"
@@ -596,6 +597,7 @@ build_mpv() {
     [[ "${VIS_HIDDEN:-1}" != "0" ]] && \
       ld_args="$ld_args,--version-script=${SCRIPT_DIR}/shared/mpv.ver"
     local extra_libs="-lssl -lcrypto -lxml2 -lbz2 -llzma"
+    lgpl_build && extra_libs="-lxml2 -lbz2 -llzma"
     link_extra+=("-Dc_link_args=$ld_args $extra_libs")
     link_extra+=("-Dcpp_link_args=$ld_args $extra_libs")
   fi
