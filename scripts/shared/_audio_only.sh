@@ -271,7 +271,10 @@ ffmpeg_common_args() {
   # lgpl build none of them, and so no https or tls protocol either.
   local _license_flags _tls_protos
   if lgpl_build; then
-    _license_flags="--disable-openssl"
+    # No TLS at all: without OpenSSL, FFmpeg would autodetect the system's
+    # own backend (SecureTransport on Apple, Schannel on Windows) for
+    # protocols this build does not have.
+    _license_flags=$'--disable-openssl\n--disable-securetransport\n--disable-schannel'
     _tls_protos=""
   else
     _license_flags=$'--enable-gpl\n--enable-version3\n--enable-librubberband\n--enable-openssl'
