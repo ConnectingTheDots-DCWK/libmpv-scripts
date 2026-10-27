@@ -21,6 +21,11 @@ env:
   # build-push-action uploads a build record per image as an artifact, which
   # gh run download without a name cannot extract.
   DOCKER_BUILD_RECORD_UPLOAD: 'false'
+  # This fork builds the LGPL-2.1 library ConnectingTheDots-DCWK's apps
+  # ship: no Rubber Band, no GPL or version-3 code, no OpenSSL. See
+  # LIBMPV_LICENSE in scripts/shared/_versions.sh. Handed to every release
+  # build and to the verify job; the native patch tests keep the default.
+  LIBMPV_LICENSE: lgpl
 
 # The jobs only read the repository. The artifacts and the build cache use
 # the runner's own token, not GITHUB_TOKEN.
@@ -56,7 +61,7 @@ jobs:
       - name: Build
         run: |
           docker run --rm \
-            -e STRICT_SOURCES -e RECORD_SOURCES=/scripts/builds/sources-linux-${{ matrix.arch }}.txt \
+            -e STRICT_SOURCES -e LIBMPV_LICENSE -e RECORD_SOURCES=/scripts/builds/sources-linux-${{ matrix.arch }}.txt \
             -v "$PWD:/scripts" -w /scripts \
             mpv-build-linux bash scripts/build_libmpv_linux.sh --arch=${{ matrix.arch }}
       - uses: actions/upload-artifact@v7
@@ -94,7 +99,7 @@ jobs:
         run: |
           docker run --rm --platform linux/amd64 \
             -e ABIS="arm64-v8a armeabi-v7a x86_64" \
-            -e STRICT_SOURCES -e RECORD_SOURCES=/scripts/builds/sources-android.txt \
+            -e STRICT_SOURCES -e LIBMPV_LICENSE -e RECORD_SOURCES=/scripts/builds/sources-android.txt \
             -v "$PWD:/scripts" -w /scripts \
             mpv-build-android bash scripts/build_libmpv_android.sh
       - uses: actions/upload-artifact@v7
@@ -134,7 +139,7 @@ jobs:
       - name: Build
         run: |
           docker run --rm \
-            -e STRICT_SOURCES -e RECORD_SOURCES=/scripts/builds/sources-windows-${{ matrix.arch }}.txt \
+            -e STRICT_SOURCES -e LIBMPV_LICENSE -e RECORD_SOURCES=/scripts/builds/sources-windows-${{ matrix.arch }}.txt \
             -v "$PWD:/scripts" -w /scripts \
             mpv-build-windows bash scripts/build_libmpv_windows.sh --arch=${{ matrix.arch }}
       - uses: actions/upload-artifact@v7
@@ -251,7 +256,7 @@ jobs:
         run: |
           sysroot="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib"
           test -d "$sysroot"
-          docker run --rm \
+          docker run --rm -e LIBMPV_LICENSE \
             -v "$PWD:/scripts" -w /scripts \
             -v "$sysroot:/ndk-sysroot:ro" \
             mpv-build-verify bash scripts/verify_binaries.sh
@@ -324,6 +329,9 @@ jobs:
   native:
     name: Native tests (ASan)
     runs-on: ubuntu-24.04
+    # The patches are tested on the upstream build, TLS included.
+    env:
+      LIBMPV_LICENSE: gpl
     steps:
       - uses: actions/checkout@v7
       # mpv includes the libplacebo headers (video/csputils.h) even with
