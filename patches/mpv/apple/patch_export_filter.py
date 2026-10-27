@@ -23,6 +23,7 @@ script lives at link time via `-Wl,--version-script` directly in build_mpv).
 
 Usage: patch_export_filter.py <mpv_source_dir> <abs_path_to_mpv.exports> <abs_prefix_dir>
 """
+import os
 import pathlib
 import sys
 
@@ -51,9 +52,10 @@ def _archive(name: str) -> str:
         sys.exit(f"[patch_export_filter] missing archive: {a}")
     return str(a)
 
+# An lgpl build has no OpenSSL (LIBMPV_LICENSE, scripts/shared/_versions.sh).
+_tls = [] if os.environ.get("LIBMPV_LICENSE") == "lgpl" else ["ssl", "crypto"]
 extra_archives = [
-    _archive("ssl"),
-    _archive("crypto"),
+    *(_archive(name) for name in _tls),
     _archive("xml2"),
     _archive("bz2"),
     _archive("lzma"),
